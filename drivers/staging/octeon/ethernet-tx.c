@@ -32,6 +32,7 @@
 #include <linux/ip.h>
 #include <linux/ratelimit.h>
 #include <linux/string.h>
+#include <linux/interrupt.h>
 #include <net/dst.h>
 #ifdef CONFIG_XFRM
 #include <linux/xfrm.h>
@@ -47,13 +48,13 @@
 #include "ethernet-tx.h"
 #include "ethernet-util.h"
 
-#include "cvmx-wqe.h"
-#include "cvmx-fau.h"
-#include "cvmx-pip.h"
-#include "cvmx-pko.h"
-#include "cvmx-helper.h"
+#include <asm/octeon/cvmx-wqe.h>
+#include <asm/octeon/cvmx-fau.h>
+#include <asm/octeon/cvmx-pip.h>
+#include <asm/octeon/cvmx-pko.h>
+#include <asm/octeon/cvmx-helper.h>
 
-#include "cvmx-gmxx-defs.h"
+#include <asm/octeon/cvmx-gmxx-defs.h>
 
 #define CVM_OCT_SKB_CB(skb)	((u64 *)((skb)->cb))
 

@@ -245,6 +245,8 @@
  *	TCP_CLOSE		socket is finished
  */
 
+#define pr_fmt(fmt) "TCP: " fmt
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/types.h>
@@ -282,11 +284,9 @@ int sysctl_tcp_fin_timeout __read_mostly = TCP_FIN_TIMEOUT;
 struct percpu_counter tcp_orphan_count;
 EXPORT_SYMBOL_GPL(tcp_orphan_count);
 
-long sysctl_tcp_mem[3] __read_mostly;
 int sysctl_tcp_wmem[3] __read_mostly;
 int sysctl_tcp_rmem[3] __read_mostly;
 
-EXPORT_SYMBOL(sysctl_tcp_mem);
 EXPORT_SYMBOL(sysctl_tcp_rmem);
 EXPORT_SYMBOL(sysctl_tcp_wmem);
 
@@ -701,11 +701,12 @@ struct sk_buff *sk_stream_alloc_skb(struct sock *sk, int size, gfp_t gfp)
 	skb = alloc_skb_fclone(size + sk->sk_prot->max_header, gfp);
 	if (skb) {
 		if (sk_wmem_schedule(sk, skb->truesize)) {
+			skb_reserve(skb, sk->sk_prot->max_header);
 			/*
 			 * Make sure that we have exactly size bytes
 			 * available to the caller, no more, no less.
 			 */
-			skb_reserve(skb, skb_tailroom(skb) - size);
+			skb->avail_size = size;
 			return skb;
 		}
 		__kfree_skb(skb);
@@ -850,8 +851,7 @@ new_segment:
 wait_for_sndbuf:
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 wait_for_memory:
-		if (copied)
-			tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
+		tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
 
 		if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
 			goto do_error;
@@ -860,7 +860,7 @@ wait_for_memory:
 	}
 
 out:
-	if (copied)
+	if (copied && !(flags & MSG_SENDPAGE_NOTLAST))
 		tcp_push(sk, flags, mss_now, tp->nonagle);
 	return copied;
 
@@ -888,18 +888,18 @@ int tcp_sendpage(struct sock *sk, struct page *page, int offset,
 }
 EXPORT_SYMBOL(tcp_sendpage);
 
-#define TCP_PAGE(sk)	(sk->sk_sndmsg_page)
-#define TCP_OFF(sk)	(sk->sk_sndmsg_off)
-
-static inline int select_size(const struct sock *sk, int sg)
+static inline int select_size(const struct sock *sk, bool sg)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	int tmp = tp->mss_cache;
 
 	if (sg) {
-		if (sk_can_gso(sk))
-			tmp = 0;
-		else {
+		if (sk_can_gso(sk)) {
+			/* Small frames wont use a full page:
+			 * Payload will immediately follow tcp header.
+			 */
+			tmp = SKB_WITH_OVERHEAD(2048 - MAX_TCP_HEADER);
+		} else {
 			int pgbreak = SKB_MAX_HEAD(MAX_TCP_HEADER);
 
 			if (tmp >= pgbreak &&
@@ -917,9 +917,9 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	struct iovec *iov;
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *skb;
-	int iovlen, flags;
+	int iovlen, flags, err, copied;
 	int mss_now, size_goal;
-	int sg, err, copied;
+	bool sg;
 	long timeo;
 
 	lock_sock(sk);
@@ -946,7 +946,7 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto out_err;
 
-	sg = sk->sk_route_caps & NETIF_F_SG;
+	sg = !!(sk->sk_route_caps & NETIF_F_SG);
 
 	while (--iovlen >= 0) {
 		size_t seglen = iov->iov_len;
@@ -995,18 +995,22 @@ new_segment:
 				copy = seglen;
 
 			/* Where to copy to? */
-			if (skb_tailroom(skb) > 0) {
+			if (skb_availroom(skb) > 0) {
 				/* We have some space in skb head. Superb! */
-				if (copy > skb_tailroom(skb))
-					copy = skb_tailroom(skb);
+				copy = min_t(int, copy, skb_availroom(skb));
 				err = skb_add_data_nocache(sk, skb, from, copy);
 				if (err)
 					goto do_fault;
 			} else {
 				int merge = 0;
 				int i = skb_shinfo(skb)->nr_frags;
-				struct page *page = TCP_PAGE(sk);
-				int off = TCP_OFF(sk);
+				struct page *page = sk->sk_sndmsg_page;
+				int off;
+
+				if (page && page_count(page) == 1)
+					sk->sk_sndmsg_off = 0;
+
+				off = sk->sk_sndmsg_off;
 
 				if (skb_can_coalesce(skb, i, page, off) &&
 				    off != PAGE_SIZE) {
@@ -1023,7 +1027,7 @@ new_segment:
 				} else if (page) {
 					if (off == PAGE_SIZE) {
 						put_page(page);
-						TCP_PAGE(sk) = page = NULL;
+						sk->sk_sndmsg_page = page = NULL;
 						off = 0;
 					}
 				} else
@@ -1049,9 +1053,9 @@ new_segment:
 					/* If this page was new, give it to the
 					 * socket so it does not get leaked.
 					 */
-					if (!TCP_PAGE(sk)) {
-						TCP_PAGE(sk) = page;
-						TCP_OFF(sk) = 0;
+					if (!sk->sk_sndmsg_page) {
+						sk->sk_sndmsg_page = page;
+						sk->sk_sndmsg_off = 0;
 					}
 					goto do_error;
 				}
@@ -1061,15 +1065,15 @@ new_segment:
 					skb_frag_size_add(&skb_shinfo(skb)->frags[i - 1], copy);
 				} else {
 					skb_fill_page_desc(skb, i, page, off, copy);
-					if (TCP_PAGE(sk)) {
+					if (sk->sk_sndmsg_page) {
 						get_page(page);
 					} else if (off + copy < PAGE_SIZE) {
 						get_page(page);
-						TCP_PAGE(sk) = page;
+						sk->sk_sndmsg_page = page;
 					}
 				}
 
-				TCP_OFF(sk) = off + copy;
+				sk->sk_sndmsg_off = off + copy;
 			}
 
 			if (!copied)
@@ -1447,7 +1451,7 @@ int tcp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		if ((available < target) &&
 		    (len > sysctl_tcp_dma_copybreak) && !(flags & MSG_PEEK) &&
 		    !sysctl_tcp_low_latency &&
-		    dma_find_channel(DMA_MEMCPY)) {
+		    net_dma_find_channel()) {
 			preempt_enable_no_resched();
 			tp->ucopy.pinned_list =
 					dma_pin_iovec_pages(msg->msg_iov, len);
@@ -1662,7 +1666,7 @@ do_prequeue:
 		if (!(flags & MSG_TRUNC)) {
 #ifdef CONFIG_NET_DMA
 			if (!tp->ucopy.dma_chan && tp->ucopy.pinned_list)
-				tp->ucopy.dma_chan = dma_find_channel(DMA_MEMCPY);
+				tp->ucopy.dma_chan = net_dma_find_channel();
 
 			if (tp->ucopy.dma_chan) {
 				tp->ucopy.dma_cookie = dma_skb_copy_datagram_iovec(
@@ -1672,7 +1676,8 @@ do_prequeue:
 
 				if (tp->ucopy.dma_cookie < 0) {
 
-					printk(KERN_ALERT "dma_cookie < 0\n");
+					pr_alert("%s: dma_cookie < 0\n",
+						 __func__);
 
 					/* Exception. Bailout! */
 					if (!copied)
@@ -1873,6 +1878,20 @@ void tcp_shutdown(struct sock *sk, int how)
 }
 EXPORT_SYMBOL(tcp_shutdown);
 
+bool tcp_check_oom(struct sock *sk, int shift)
+{
+	bool too_many_orphans, out_of_socket_memory;
+
+	too_many_orphans = tcp_too_many_orphans(sk, shift);
+	out_of_socket_memory = tcp_out_of_memory(sk);
+
+	if (too_many_orphans && net_ratelimit())
+		pr_info("too many orphaned sockets\n");
+	if (out_of_socket_memory && net_ratelimit())
+		pr_info("out of memory -- consider tuning tcp_mem\n");
+	return too_many_orphans || out_of_socket_memory;
+}
+
 void tcp_close(struct sock *sk, long timeout)
 {
 	struct sk_buff *skb;
@@ -2012,10 +2031,7 @@ adjudge_to_death:
 	}
 	if (sk->sk_state != TCP_CLOSE) {
 		sk_mem_reclaim(sk);
-		if (tcp_too_many_orphans(sk, 0)) {
-			if (net_ratelimit())
-				printk(KERN_INFO "TCP: too many of orphaned "
-				       "sockets\n");
+		if (tcp_check_oom(sk, 0)) {
 			tcp_set_state(sk, TCP_CLOSE);
 			tcp_send_active_reset(sk, GFP_ATOMIC);
 			NET_INC_STATS_BH(sock_net(sk),
@@ -2653,7 +2669,8 @@ int compat_tcp_getsockopt(struct sock *sk, int level, int optname,
 EXPORT_SYMBOL(compat_tcp_getsockopt);
 #endif
 
-struct sk_buff *tcp_tso_segment(struct sk_buff *skb, u32 features)
+struct sk_buff *tcp_tso_segment(struct sk_buff *skb,
+	netdev_features_t features)
 {
 	struct sk_buff *segs = ERR_PTR(-EINVAL);
 	struct tcphdr *th;
@@ -3212,11 +3229,21 @@ static int __init set_thash_entries(char *str)
 }
 __setup("thash_entries=", set_thash_entries);
 
+void tcp_init_mem(struct net *net)
+{
+	unsigned long limit = nr_free_buffer_pages() / 8;
+	limit = max(limit, 128UL);
+	net->ipv4.sysctl_tcp_mem[0] = limit / 4 * 3;
+	net->ipv4.sysctl_tcp_mem[1] = limit;
+	net->ipv4.sysctl_tcp_mem[2] = net->ipv4.sysctl_tcp_mem[0] * 2;
+}
+
 void __init tcp_init(void)
 {
 	struct sk_buff *skb = NULL;
 	unsigned long limit;
-	int i, max_share, cnt;
+	int max_rshare, max_wshare, cnt;
+	unsigned int i;
 	unsigned long jiffy = jiffies;
 
 	BUILD_BUG_ON(sizeof(struct tcp_skb_cb) > sizeof(skb->cb));
@@ -3259,7 +3286,7 @@ void __init tcp_init(void)
 					&tcp_hashinfo.bhash_size,
 					NULL,
 					64 * 1024);
-	tcp_hashinfo.bhash_size = 1 << tcp_hashinfo.bhash_size;
+	tcp_hashinfo.bhash_size = 1U << tcp_hashinfo.bhash_size;
 	for (i = 0; i < tcp_hashinfo.bhash_size; i++) {
 		spin_lock_init(&tcp_hashinfo.bhash[i].lock);
 		INIT_HLIST_HEAD(&tcp_hashinfo.bhash[i].chain);
@@ -3272,27 +3299,22 @@ void __init tcp_init(void)
 	sysctl_tcp_max_orphans = cnt / 2;
 	sysctl_max_syn_backlog = max(128, cnt / 256);
 
-	limit = nr_free_buffer_pages() / 8;
-	limit = max(limit, 128UL);
-	sysctl_tcp_mem[0] = limit / 4 * 3;
-	sysctl_tcp_mem[1] = limit;
-	sysctl_tcp_mem[2] = sysctl_tcp_mem[0] * 2;
-
+	tcp_init_mem(&init_net);
 	/* Set per-socket limits to no more than 1/128 the pressure threshold */
-	limit = ((unsigned long)sysctl_tcp_mem[1]) << (PAGE_SHIFT - 7);
-	max_share = min(4UL*1024*1024, limit);
+	limit = nr_free_buffer_pages() << (PAGE_SHIFT - 7);
+	max_wshare = min(4UL*1024*1024, limit);
+	max_rshare = min(6UL*1024*1024, limit);
 
 	sysctl_tcp_wmem[0] = SK_MEM_QUANTUM;
 	sysctl_tcp_wmem[1] = 16*1024;
-	sysctl_tcp_wmem[2] = max(64*1024, max_share);
+	sysctl_tcp_wmem[2] = max(64*1024, max_wshare);
 
 	sysctl_tcp_rmem[0] = SK_MEM_QUANTUM;
 	sysctl_tcp_rmem[1] = 87380;
-	sysctl_tcp_rmem[2] = max(87380, max_share);
+	sysctl_tcp_rmem[2] = max(87380, max_rshare);
 
-	printk(KERN_INFO "TCP: Hash tables configured "
-	       "(established %u bind %u)\n",
-	       tcp_hashinfo.ehash_mask + 1, tcp_hashinfo.bhash_size);
+	pr_info("Hash tables configured (established %u bind %u)\n",
+		tcp_hashinfo.ehash_mask + 1, tcp_hashinfo.bhash_size);
 
 	tcp_register_congestion_control(&tcp_reno);
 

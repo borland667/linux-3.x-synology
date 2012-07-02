@@ -24,9 +24,11 @@
 #include <linux/gpio.h>
 #include <linux/pwm_backlight.h>
 #include <linux/fb.h>
+#include <linux/mmc/host.h>
 
 #include <video/platform_lcd.h>
 
+#include <asm/hardware/vic.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/irq.h>
@@ -51,6 +53,7 @@
 #include <plat/backlight.h>
 #include <plat/fb.h>
 #include <plat/regs-fb.h>
+#include <plat/sdhci.h>
 
 #include "common.h"
 
@@ -180,8 +183,26 @@ static struct platform_device *smdk6450_devices[] __initdata = {
 	&s5p6450_device_iis0,
 	&s3c_device_fb,
 	&smdk6450_lcd_lte480wv,
-
+	&s3c_device_hsmmc0,
+	&s3c_device_hsmmc1,
+	&s3c_device_hsmmc2,
 	/* s5p6450_device_spi0 will be added */
+};
+
+static struct s3c_sdhci_platdata smdk6450_hsmmc0_pdata __initdata = {
+	.cd_type	= S3C_SDHCI_CD_NONE,
+};
+
+static struct s3c_sdhci_platdata smdk6450_hsmmc1_pdata __initdata = {
+	.cd_type	= S3C_SDHCI_CD_NONE,
+#if defined(CONFIG_S5P64X0_SD_CH1_8BIT)
+	.max_width	= 8,
+	.host_caps	= MMC_CAP_8_BIT_DATA,
+#endif
+};
+
+static struct s3c_sdhci_platdata smdk6450_hsmmc2_pdata __initdata = {
+	.cd_type	= S3C_SDHCI_CD_NONE,
 };
 
 static struct s3c2410_platform_i2c s5p6450_i2c0_data __initdata = {
@@ -255,6 +276,10 @@ static void __init smdk6450_machine_init(void)
 	s5p6450_set_lcd_interface();
 	s3c_fb_set_platdata(&smdk6450_lcd_pdata);
 
+	s3c_sdhci0_set_platdata(&smdk6450_hsmmc0_pdata);
+	s3c_sdhci1_set_platdata(&smdk6450_hsmmc1_pdata);
+	s3c_sdhci2_set_platdata(&smdk6450_hsmmc2_pdata);
+
 	platform_add_devices(smdk6450_devices, ARRAY_SIZE(smdk6450_devices));
 }
 
@@ -263,7 +288,9 @@ MACHINE_START(SMDK6450, "SMDK6450")
 	.atag_offset	= 0x100,
 
 	.init_irq	= s5p6450_init_irq,
+	.handle_irq	= vic_handle_irq,
 	.map_io		= smdk6450_map_io,
 	.init_machine	= smdk6450_machine_init,
 	.timer		= &s5p_timer,
+	.restart	= s5p64x0_restart,
 MACHINE_END

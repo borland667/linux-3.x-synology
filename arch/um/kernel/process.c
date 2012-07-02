@@ -88,11 +88,8 @@ static inline void set_current(struct task_struct *task)
 
 extern void arch_switch_to(struct task_struct *to);
 
-void *_switch_to(void *prev, void *next, void *last)
+void *__switch_to(struct task_struct *from, struct task_struct *to)
 {
-	struct task_struct *from = prev;
-	struct task_struct *to = next;
-
 	to->thread.prev_sched = from;
 	set_current(to);
 
@@ -111,7 +108,6 @@ void *_switch_to(void *prev, void *next, void *last)
 	} while (current->thread.saved_task);
 
 	return current->thread.prev_sched;
-
 }
 
 void interrupt_end(void)
@@ -126,9 +122,9 @@ void exit_thread(void)
 {
 }
 
-void *get_current(void)
+int get_current_pid(void)
 {
-	return current;
+	return task_pid_nr(current);
 }
 
 /*
@@ -246,10 +242,12 @@ void default_idle(void)
 		if (need_resched())
 			schedule();
 
-		tick_nohz_stop_sched_tick(1);
+		tick_nohz_idle_enter();
+		rcu_idle_enter();
 		nsecs = disable_timer();
 		idle_sleep(nsecs);
-		tick_nohz_restart_sched_tick();
+		rcu_idle_exit();
+		tick_nohz_idle_exit();
 	}
 }
 

@@ -22,3 +22,5 @@ obj-$(CONFIG_MACH_SYNOLOGY)		+= synology-setup.o
 obj-$(CONFIG_MACH_SYNOLOGY_6282)	+= synology-setup.o
 
 obj-$(CONFIG_CPU_IDLE)			+= cpuidle.o
+obj-$(CONFIG_ARCH_KIRKWOOD_DT)		+= board-dt.o
+obj-$(CONFIG_MACH_DREAMPLUG_DT)		+= board-dreamplug.o

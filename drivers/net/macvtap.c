@@ -1,5 +1,6 @@
 #include <linux/etherdevice.h>
 #include <linux/if_macvlan.h>
+#include <linux/if_vlan.h>
 #include <linux/interrupt.h>
 #include <linux/nsproxy.h>
 #include <linux/compat.h>
@@ -13,6 +14,7 @@
 #include <linux/init.h>
 #include <linux/wait.h>
 #include <linux/cdev.h>
+#include <linux/idr.h>
 #include <linux/fs.h>
 
 #include <net/net_namespace.h>
@@ -145,8 +147,8 @@ static void macvtap_put_queue(struct macvtap_queue *q)
 	if (vlan) {
 		int index = get_slot(vlan, q);
 
-		rcu_assign_pointer(vlan->taps[index], NULL);
-		rcu_assign_pointer(q->vlan, NULL);
+		RCU_INIT_POINTER(vlan->taps[index], NULL);
+		RCU_INIT_POINTER(q->vlan, NULL);
 		sock_put(&q->sk);
 		--vlan->numvtaps;
 	}
@@ -175,6 +177,14 @@ static struct macvtap_queue *macvtap_get_queue(struct net_device *dev,
 	if (!numvtaps)
 		goto out;
 
+	/* Check if we can use flow to select a queue */
+	rxq = skb_get_rxhash(skb);
+	if (rxq) {
+		tap = rcu_dereference(vlan->taps[rxq % numvtaps]);
+		if (tap)
+			goto out;
+	}
+
 	if (likely(skb_rx_queue_recorded(skb))) {
 		rxq = skb_get_rx_queue(skb);
 
@@ -182,14 +192,6 @@ static struct macvtap_queue *macvtap_get_queue(struct net_device *dev,
 			rxq -= numvtaps;
 
 		tap = rcu_dereference(vlan->taps[rxq]);
-		if (tap)
-			goto out;
-	}
-
-	/* Check if we can use flow to select a queue */
-	rxq = skb_get_rxhash(skb);
-	if (rxq) {
-		tap = rcu_dereference(vlan->taps[rxq % numvtaps]);
 		if (tap)
 			goto out;
 	}
@@ -223,8 +225,8 @@ static void macvtap_del_queues(struct net_device *dev)
 					      lockdep_is_held(&macvtap_lock));
 		if (q) {
 			qlist[j++] = q;
-			rcu_assign_pointer(vlan->taps[i], NULL);
-			rcu_assign_pointer(q->vlan, NULL);
+			RCU_INIT_POINTER(vlan->taps[i], NULL);
+			RCU_INIT_POINTER(q->vlan, NULL);
 			vlan->numvtaps--;
 		}
 	}
@@ -758,6 +760,8 @@ static ssize_t macvtap_put_user(struct macvtap_queue *q,
 	struct macvlan_dev *vlan;
 	int ret;
 	int vnet_hdr_len = 0;
+	int vlan_offset = 0;
+	int copied;
 
 	if (q->flags & IFF_VNET_HDR) {
 		struct virtio_net_hdr vnet_hdr;
@@ -772,18 +776,48 @@ static ssize_t macvtap_put_user(struct macvtap_queue *q,
 		if (memcpy_toiovecend(iv, (void *)&vnet_hdr, 0, sizeof(vnet_hdr)))
 			return -EFAULT;
 	}
+	copied = vnet_hdr_len;
 
-	len = min_t(int, skb->len, len);
+	if (!vlan_tx_tag_present(skb))
+		len = min_t(int, skb->len, len);
+	else {
+		int copy;
+		struct {
+			__be16 h_vlan_proto;
+			__be16 h_vlan_TCI;
+		} veth;
+		veth.h_vlan_proto = htons(ETH_P_8021Q);
+		veth.h_vlan_TCI = htons(vlan_tx_tag_get(skb));
 
-	ret = skb_copy_datagram_const_iovec(skb, 0, iv, vnet_hdr_len, len);
+		vlan_offset = offsetof(struct vlan_ethhdr, h_vlan_proto);
+		len = min_t(int, skb->len + VLAN_HLEN, len);
 
+		copy = min_t(int, vlan_offset, len);
+		ret = skb_copy_datagram_const_iovec(skb, 0, iv, copied, copy);
+		len -= copy;
+		copied += copy;
+		if (ret || !len)
+			goto done;
+
+		copy = min_t(int, sizeof(veth), len);
+		ret = memcpy_toiovecend(iv, (void *)&veth, copied, copy);
+		len -= copy;
+		copied += copy;
+		if (ret || !len)
+			goto done;
+	}
+
+	ret = skb_copy_datagram_const_iovec(skb, vlan_offset, iv, copied, len);
+	copied += len;
+
+done:
 	rcu_read_lock_bh();
 	vlan = rcu_dereference_bh(q->vlan);
 	if (vlan)
-		macvlan_count_rx(vlan, len, ret == 0, 0);
+		macvlan_count_rx(vlan, copied - vnet_hdr_len, ret == 0, 0);
 	rcu_read_unlock_bh();
 
-	return ret ? ret : (len + vnet_hdr_len);
+	return ret ? ret : copied;
 }
 
 static ssize_t macvtap_do_read(struct macvtap_queue *q, struct kiocb *iocb,

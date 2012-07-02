@@ -60,7 +60,7 @@ struct wm8350_jack_data {
 };
 
 struct wm8350_data {
-	struct snd_soc_codec codec;
+	struct wm8350 *wm8350;
 	struct wm8350_output out1;
 	struct wm8350_output out2;
 	struct wm8350_jack_data hpl;
@@ -696,7 +696,7 @@ static const struct snd_soc_dapm_widget wm8350_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("IN3L"),
 };
 
-static const struct snd_soc_dapm_route audio_map[] = {
+static const struct snd_soc_dapm_route wm8350_dapm_routes[] = {
 
 	/* left playback mixer */
 	{"Left Playback Mixer", "Playback Switch", "Left DAC"},
@@ -776,29 +776,6 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	/* Beep */
 	{"Beep", NULL, "IN3R PGA"},
 };
-
-static int wm8350_add_widgets(struct snd_soc_codec *codec)
-{
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-	int ret;
-
-	ret = snd_soc_dapm_new_controls(dapm,
-					wm8350_dapm_widgets,
-					ARRAY_SIZE(wm8350_dapm_widgets));
-	if (ret != 0) {
-		dev_err(codec->dev, "dapm control register failed\n");
-		return ret;
-	}
-
-	/* set up audio paths */
-	ret = snd_soc_dapm_add_routes(dapm, audio_map, ARRAY_SIZE(audio_map));
-	if (ret != 0) {
-		dev_err(codec->dev, "DAPM route register failed\n");
-		return ret;
-	}
-
-	return 0;
-}
 
 static int wm8350_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 				 int clk_id, unsigned int freq, int dir)
@@ -1315,7 +1292,7 @@ static int wm8350_set_bias_level(struct snd_soc_codec *codec,
 	return 0;
 }
 
-static int wm8350_suspend(struct snd_soc_codec *codec, pm_message_t state)
+static int wm8350_suspend(struct snd_soc_codec *codec)
 {
 	wm8350_set_bias_level(codec, SND_SOC_BIAS_OFF);
 	return 0;
@@ -1332,7 +1309,7 @@ static void wm8350_hp_work(struct wm8350_data *priv,
 			   struct wm8350_jack_data *jack,
 			   u16 mask)
 {
-	struct wm8350 *wm8350 = priv->codec.control_data;
+	struct wm8350 *wm8350 = priv->wm8350;
 	u16 reg;
 	int report;
 
@@ -1365,7 +1342,7 @@ static void wm8350_hpr_work(struct work_struct *work)
 static irqreturn_t wm8350_hp_jack_handler(int irq, void *data)
 {
 	struct wm8350_data *priv = data;
-	struct wm8350 *wm8350 = priv->codec.control_data;
+	struct wm8350 *wm8350 = priv->wm8350;
 	struct wm8350_jack_data *jack = NULL;
 
 	switch (irq - wm8350->irq_base) {
@@ -1450,7 +1427,7 @@ EXPORT_SYMBOL_GPL(wm8350_hp_jack_detect);
 static irqreturn_t wm8350_mic_handler(int irq, void *data)
 {
 	struct wm8350_data *priv = data;
-	struct wm8350 *wm8350 = priv->codec.control_data;
+	struct wm8350 *wm8350 = priv->wm8350;
 	u16 reg;
 	int report = 0;
 
@@ -1511,7 +1488,7 @@ EXPORT_SYMBOL_GPL(wm8350_mic_jack_detect);
 			SNDRV_PCM_FMTBIT_S20_3LE |\
 			SNDRV_PCM_FMTBIT_S24_LE)
 
-static struct snd_soc_dai_ops wm8350_dai_ops = {
+static const struct snd_soc_dai_ops wm8350_dai_ops = {
 	 .hw_params	= wm8350_pcm_hw_params,
 	 .digital_mute	= wm8350_mute,
 	 .trigger	= wm8350_pcm_trigger,
@@ -1553,10 +1530,13 @@ static  int wm8350_codec_probe(struct snd_soc_codec *codec)
 		return -EINVAL;
 	}
 
-	priv = kzalloc(sizeof(struct wm8350_data), GFP_KERNEL);
+	priv = devm_kzalloc(codec->dev, sizeof(struct wm8350_data),
+			    GFP_KERNEL);
 	if (priv == NULL)
 		return -ENOMEM;
 	snd_soc_codec_set_drvdata(codec, priv);
+
+	priv->wm8350 = wm8350;
 
 	for (i = 0; i < ARRAY_SIZE(supply_names); i++)
 		priv->supplies[i].supply = supply_names[i];
@@ -1564,9 +1544,8 @@ static  int wm8350_codec_probe(struct snd_soc_codec *codec)
 	ret = regulator_bulk_get(wm8350->dev, ARRAY_SIZE(priv->supplies),
 				 priv->supplies);
 	if (ret != 0)
-		goto err_priv;
+		return ret;
 
-	wm8350->codec.codec = codec;
 	codec->control_data = wm8350;
 
 	/* Put the codec into reset if it wasn't already */
@@ -1633,17 +1612,9 @@ static  int wm8350_codec_probe(struct snd_soc_codec *codec)
 			    wm8350_mic_handler, 0, "Microphone detect", priv);
 
 
-	snd_soc_add_controls(codec, wm8350_snd_controls,
-				ARRAY_SIZE(wm8350_snd_controls));
-	wm8350_add_widgets(codec);
-
 	wm8350_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	return 0;
-
-err_priv:
-	kfree(priv);
-	return ret;
 }
 
 static int  wm8350_codec_remove(struct snd_soc_codec *codec)
@@ -1676,7 +1647,7 @@ static int  wm8350_codec_remove(struct snd_soc_codec *codec)
 	wm8350_clear_bits(wm8350, WM8350_POWER_MGMT_5, WM8350_CODEC_ENA);
 
 	regulator_bulk_free(ARRAY_SIZE(priv->supplies), priv->supplies);
-	kfree(priv);
+
 	return 0;
 }
 
@@ -1688,6 +1659,13 @@ static struct snd_soc_codec_driver soc_codec_dev_wm8350 = {
 	.read = wm8350_codec_read,
 	.write = wm8350_codec_write,
 	.set_bias_level = wm8350_set_bias_level,
+
+	.controls = wm8350_snd_controls,
+	.num_controls = ARRAY_SIZE(wm8350_snd_controls),
+	.dapm_widgets = wm8350_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(wm8350_dapm_widgets),
+	.dapm_routes = wm8350_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(wm8350_dapm_routes),
 };
 
 static int __devinit wm8350_probe(struct platform_device *pdev)
@@ -1711,17 +1689,7 @@ static struct platform_driver wm8350_codec_driver = {
 	.remove = __devexit_p(wm8350_remove),
 };
 
-static __init int wm8350_init(void)
-{
-	return platform_driver_register(&wm8350_codec_driver);
-}
-module_init(wm8350_init);
-
-static __exit void wm8350_exit(void)
-{
-	platform_driver_unregister(&wm8350_codec_driver);
-}
-module_exit(wm8350_exit);
+module_platform_driver(wm8350_codec_driver);
 
 MODULE_DESCRIPTION("ASoC WM8350 driver");
 MODULE_AUTHOR("Liam Girdwood");

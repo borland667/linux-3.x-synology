@@ -340,7 +340,7 @@ static void s3c_hsotg_init_fifo(struct s3c_hsotg *hsotg)
 	/* currently we allocate TX FIFOs for all possible endpoints,
 	 * and assume that they are all the same size. */
 
-	for (ep = 0; ep <= 15; ep++) {
+	for (ep = 1; ep <= 15; ep++) {
 		val = addr;
 		val |= size << S3C_DPTXFSIZn_DPTxFSize_SHIFT;
 		addr += size;
@@ -741,7 +741,7 @@ static void s3c_hsotg_start_req(struct s3c_hsotg *hsotg,
 	/* write size / packets */
 	writel(epsize, hsotg->regs + epsize_reg);
 
-	if (using_dma(hsotg)) {
+	if (using_dma(hsotg) && !continuing) {
 		unsigned int dma_reg;
 
 		/* write DMA address to control register, buffer already
@@ -1696,10 +1696,12 @@ static void s3c_hsotg_set_ep_maxpacket(struct s3c_hsotg *hsotg,
 	reg |= mpsval;
 	writel(reg, regs + S3C_DIEPCTL(ep));
 
-	reg = readl(regs + S3C_DOEPCTL(ep));
-	reg &= ~S3C_DxEPCTL_MPS_MASK;
-	reg |= mpsval;
-	writel(reg, regs + S3C_DOEPCTL(ep));
+	if (ep) {
+		reg = readl(regs + S3C_DOEPCTL(ep));
+		reg &= ~S3C_DxEPCTL_MPS_MASK;
+		reg |= mpsval;
+		writel(reg, regs + S3C_DOEPCTL(ep));
+	}
 
 	return;
 
@@ -1919,7 +1921,8 @@ static void s3c_hsotg_epint(struct s3c_hsotg *hsotg, unsigned int idx,
 		    ints & S3C_DIEPMSK_TxFIFOEmpty) {
 			dev_dbg(hsotg->dev, "%s: ep%d: TxFIFOEmpty\n",
 				__func__, idx);
-			s3c_hsotg_trytx(hsotg, hs_ep);
+			if (!using_dma(hsotg))
+				s3c_hsotg_trytx(hsotg, hs_ep);
 		}
 	}
 }
@@ -2586,7 +2589,7 @@ static int s3c_hsotg_start(struct usb_gadget_driver *driver,
 		return -EINVAL;
 	}
 
-	if (driver->speed < USB_SPEED_FULL)
+	if (driver->max_speed < USB_SPEED_FULL)
 		dev_err(hsotg->dev, "%s: bad speed\n", __func__);
 
 	if (!bind || !driver->setup) {
@@ -3362,7 +3365,7 @@ static int __devinit s3c_hsotg_probe(struct platform_device *pdev)
 
 	dev_set_name(&hsotg->gadget.dev, "gadget");
 
-	hsotg->gadget.is_dualspeed = 1;
+	hsotg->gadget.max_speed = USB_SPEED_HIGH;
 	hsotg->gadget.ops = &s3c_hsotg_gadget_ops;
 	hsotg->gadget.name = dev_name(dev);
 
@@ -3467,18 +3470,7 @@ static struct platform_driver s3c_hsotg_driver = {
 	.resume		= s3c_hsotg_resume,
 };
 
-static int __init s3c_hsotg_modinit(void)
-{
-	return platform_driver_register(&s3c_hsotg_driver);
-}
-
-static void __exit s3c_hsotg_modexit(void)
-{
-	platform_driver_unregister(&s3c_hsotg_driver);
-}
-
-module_init(s3c_hsotg_modinit);
-module_exit(s3c_hsotg_modexit);
+module_platform_driver(s3c_hsotg_driver);
 
 MODULE_DESCRIPTION("Samsung S3C USB High-speed/OtG device");
 MODULE_AUTHOR("Ben Dooks <ben@simtec.co.uk>");

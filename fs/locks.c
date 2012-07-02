@@ -510,12 +510,13 @@ static void __locks_delete_block(struct file_lock *waiter)
 
 /*
  */
-static void locks_delete_block(struct file_lock *waiter)
+void locks_delete_block(struct file_lock *waiter)
 {
 	lock_flocks();
 	__locks_delete_block(waiter);
 	unlock_flocks();
 }
+EXPORT_SYMBOL(locks_delete_block);
 
 /* Insert waiter into blocker's block list.
  * We use a circular list so that processes can be easily woken up in
@@ -1205,6 +1206,8 @@ int __break_lease(struct inode *inode, unsigned int mode)
 	int want_write = (mode & O_ACCMODE) != O_RDONLY;
 
 	new_fl = lease_alloc(NULL, want_write ? F_WRLCK : F_RDLCK);
+	if (IS_ERR(new_fl))
+		return PTR_ERR(new_fl);
 
 	lock_flocks();
 
@@ -1220,12 +1223,6 @@ int __break_lease(struct inode *inode, unsigned int mode)
 	for (fl = flock; fl && IS_LEASE(fl); fl = fl->fl_next)
 		if (fl->fl_owner == current->files)
 			i_have_this_lease = 1;
-
-	if (IS_ERR(new_fl) && !i_have_this_lease
-			&& ((mode & O_NONBLOCK) == 0)) {
-		error = PTR_ERR(new_fl);
-		goto out;
-	}
 
 	break_time = 0;
 	if (lease_break_time > 0) {
@@ -1284,8 +1281,7 @@ restart:
 
 out:
 	unlock_flocks();
-	if (!IS_ERR(new_fl))
-		locks_free_lock(new_fl);
+	locks_free_lock(new_fl);
 	return error;
 }
 

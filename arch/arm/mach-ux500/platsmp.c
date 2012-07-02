@@ -19,6 +19,7 @@
 
 #include <asm/cacheflush.h>
 #include <asm/hardware/gic.h>
+#include <asm/smp_plat.h>
 #include <asm/smp_scu.h>
 #include <mach/hardware.h>
 #include <mach/setup.h>
@@ -98,7 +99,7 @@ int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
 	 */
 	write_pen_release(cpu_logical_map(cpu));
 
-	gic_raise_softirq(cpumask_of(cpu), 1);
+	smp_send_reschedule(cpu);
 
 	timeout = jiffies + (1 * HZ);
 	while (time_before(jiffies, timeout)) {

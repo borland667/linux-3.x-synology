@@ -23,8 +23,7 @@ void s3c64xx_init_io(struct map_desc *mach_desc, int size);
 void s3c64xx_register_clocks(unsigned long xtal, unsigned armclk_limit);
 void s3c64xx_setup_clocks(void);
 
-extern struct syscore_ops s3c64xx_irq_syscore_ops;
-extern struct sysdev_class s3c64xx_sysclass;
+void s3c64xx_restart(char mode, const char *cmd);
 
 #ifdef CONFIG_CPU_S3C6400
 

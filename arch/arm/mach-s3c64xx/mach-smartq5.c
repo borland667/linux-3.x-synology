@@ -17,6 +17,7 @@
 #include <linux/leds.h>
 #include <linux/platform_device.h>
 
+#include <asm/hardware/vic.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
@@ -148,7 +149,9 @@ MACHINE_START(SMARTQ5, "SmartQ 5")
 	/* Maintainer: Maurus Cuelenaere <mcuelenaere AT gmail DOT com> */
 	.atag_offset	= 0x100,
 	.init_irq	= s3c6410_init_irq,
+	.handle_irq	= vic_handle_irq,
 	.map_io		= smartq_map_io,
 	.init_machine	= smartq5_machine_init,
 	.timer		= &s3c24xx_timer,
+	.restart	= s3c64xx_restart,
 MACHINE_END

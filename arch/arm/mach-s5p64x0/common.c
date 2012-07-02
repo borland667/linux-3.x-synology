@@ -17,7 +17,7 @@
 #include <linux/init.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
 #include <linux/sched.h>
@@ -27,6 +27,7 @@
 
 #include <asm/irq.h>
 #include <asm/proc-fns.h>
+#include <asm/system_misc.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
@@ -40,11 +41,13 @@
 #include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/pm.h>
+#include <plat/sdhci.h>
 #include <plat/adc-core.h>
 #include <plat/fb-core.h>
 #include <plat/gpio-cfg.h>
 #include <plat/regs-irqtype.h>
 #include <plat/regs-serial.h>
+#include <plat/watchdog-reset.h>
 
 #include "common.h"
 
@@ -144,15 +147,12 @@ static void s5p64x0_idle(void)
 {
 	unsigned long val;
 
-	if (!need_resched()) {
-		val = __raw_readl(S5P64X0_PWR_CFG);
-		val &= ~(0x3 << 5);
-		val |= (0x1 << 5);
-		__raw_writel(val, S5P64X0_PWR_CFG);
+	val = __raw_readl(S5P64X0_PWR_CFG);
+	val &= ~(0x3 << 5);
+	val |= (0x1 << 5);
+	__raw_writel(val, S5P64X0_PWR_CFG);
 
-		cpu_do_idle();
-	}
-	local_irq_enable();
+	cpu_do_idle();
 }
 
 /*
@@ -180,6 +180,10 @@ void __init s5p6440_map_io(void)
 	s3c_adc_setname("s3c64xx-adc");
 	s3c_fb_setname("s5p64x0-fb");
 
+	s5p64x0_default_sdhci0();
+	s5p64x0_default_sdhci1();
+	s5p6440_default_sdhci2();
+
 	iotable_init(s5p6440_iodesc, ARRAY_SIZE(s5p6440_iodesc));
 	init_consistent_dma_size(SZ_8M);
 }
@@ -189,6 +193,10 @@ void __init s5p6450_map_io(void)
 	/* initialize any device information early */
 	s3c_adc_setname("s3c64xx-adc");
 	s3c_fb_setname("s5p64x0-fb");
+
+	s5p64x0_default_sdhci0();
+	s5p64x0_default_sdhci1();
+	s5p6450_default_sdhci2();
 
 	iotable_init(s5p6450_iodesc, ARRAY_SIZE(s5p6450_iodesc));
 	init_consistent_dma_size(SZ_8M);
@@ -256,17 +264,18 @@ void __init s5p6450_init_irq(void)
 	s5p_init_irq(vic, ARRAY_SIZE(vic));
 }
 
-struct sysdev_class s5p64x0_sysclass = {
-	.name	= "s5p64x0-core",
+struct bus_type s5p64x0_subsys = {
+	.name		= "s5p64x0-core",
+	.dev_name	= "s5p64x0-core",
 };
 
-static struct sys_device s5p64x0_sysdev = {
-	.cls	= &s5p64x0_sysclass,
+static struct device s5p64x0_dev = {
+	.bus	= &s5p64x0_subsys,
 };
 
 static int __init s5p64x0_core_init(void)
 {
-	return sysdev_class_register(&s5p64x0_sysclass);
+	return subsys_system_register(&s5p64x0_subsys, NULL);
 }
 core_initcall(s5p64x0_core_init);
 
@@ -275,41 +284,12 @@ int __init s5p64x0_init(void)
 	printk(KERN_INFO "S5P64X0(S5P6440/S5P6450): Initializing architecture\n");
 
 	/* set idle function */
-	pm_idle = s5p64x0_idle;
+	arm_pm_idle = s5p64x0_idle;
 
-	return sysdev_register(&s5p64x0_sysdev);
+	return device_register(&s5p64x0_dev);
 }
-
-static struct s3c24xx_uart_clksrc s5p64x0_serial_clocks[] = {
-	[0] = {
-		.name		= "pclk_low",
-		.divisor	= 1,
-		.min_baud	= 0,
-		.max_baud	= 0,
-	},
-	[1] = {
-		.name		= "uclk1",
-		.divisor	= 1,
-		.min_baud	= 0,
-		.max_baud	= 0,
-	},
-};
 
 /* uart registration process */
-
-void __init s5p64x0_common_init_uarts(struct s3c2410_uartcfg *cfg, int no)
-{
-	struct s3c2410_uartcfg *tcfg = cfg;
-	u32 ucnt;
-
-	for (ucnt = 0; ucnt < no; ucnt++, tcfg++) {
-		if (!tcfg->clocks) {
-			tcfg->clocks = s5p64x0_serial_clocks;
-			tcfg->clocks_size = ARRAY_SIZE(s5p64x0_serial_clocks);
-		}
-	}
-}
-
 void __init s5p6440_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 {
 	int uart;
@@ -319,13 +299,11 @@ void __init s5p6440_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 		s5p_uart_resources[uart].resources->end = S5P6440_PA_UART(uart) + S5P_SZ_UART;
 	}
 
-	s5p64x0_common_init_uarts(cfg, no);
 	s3c24xx_init_uartdevs("s3c6400-uart", s5p_uart_resources, cfg, no);
 }
 
 void __init s5p6450_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 {
-	s5p64x0_common_init_uarts(cfg, no);
 	s3c24xx_init_uartdevs("s3c6400-uart", s5p_uart_resources, cfg, no);
 }
 
@@ -457,3 +435,11 @@ static int __init s5p64x0_init_irq_eint(void)
 	return ret;
 }
 arch_initcall(s5p64x0_init_irq_eint);
+
+void s5p64x0_restart(char mode, const char *cmd)
+{
+	if (mode != 's')
+		arch_wdt_reset();
+
+	soft_restart(0);
+}

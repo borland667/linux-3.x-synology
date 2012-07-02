@@ -16,12 +16,13 @@
 #include <linux/atomic.h>                 /* for struct atomic_t */
 #include <linux/compiler.h>
 #include <linux/timer.h>
+#include <linux/bug.h>
 
 #include <net/checksum.h>
 #include <linux/netfilter.h>		/* for union nf_inet_addr */
 #include <linux/ip.h>
 #include <linux/ipv6.h>			/* for struct ipv6hdr */
-#include <net/ipv6.h>			/* for ipv6_addr_copy */
+#include <net/ipv6.h>
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 #include <net/netfilter/nf_conntrack.h>
 #endif
@@ -119,8 +120,8 @@ ip_vs_fill_iphdr(int af, const void *nh, struct ip_vs_iphdr *iphdr)
 		const struct ipv6hdr *iph = nh;
 		iphdr->len = sizeof(struct ipv6hdr);
 		iphdr->protocol = iph->nexthdr;
-		ipv6_addr_copy(&iphdr->saddr.in6, &iph->saddr);
-		ipv6_addr_copy(&iphdr->daddr.in6, &iph->daddr);
+		iphdr->saddr.in6 = iph->saddr;
+		iphdr->daddr.in6 = iph->daddr;
 	} else
 #endif
 	{
@@ -137,7 +138,7 @@ static inline void ip_vs_addr_copy(int af, union nf_inet_addr *dst,
 {
 #ifdef CONFIG_IP_VS_IPV6
 	if (af == AF_INET6)
-		ipv6_addr_copy(&dst->in6, &src->in6);
+		dst->in6 = src->in6;
 	else
 #endif
 	dst->ip = src->ip;
@@ -392,7 +393,7 @@ struct ip_vs_protocol {
 
 	void (*exit)(struct ip_vs_protocol *pp);
 
-	void (*init_netns)(struct net *net, struct ip_vs_proto_data *pd);
+	int (*init_netns)(struct net *net, struct ip_vs_proto_data *pd);
 
 	void (*exit_netns)(struct net *net, struct ip_vs_proto_data *pd);
 
@@ -1202,12 +1203,14 @@ ip_vs_lookup_real_service(struct net *net, int af, __u16 protocol,
 
 extern int ip_vs_use_count_inc(void);
 extern void ip_vs_use_count_dec(void);
+extern int ip_vs_register_nl_ioctl(void);
+extern void ip_vs_unregister_nl_ioctl(void);
 extern int ip_vs_control_init(void);
 extern void ip_vs_control_cleanup(void);
 extern struct ip_vs_dest *
 ip_vs_find_dest(struct net *net, int af, const union nf_inet_addr *daddr,
 		__be16 dport, const union nf_inet_addr *vaddr, __be16 vport,
-		__u16 protocol, __u32 fwmark);
+		__u16 protocol, __u32 fwmark, __u32 flags);
 extern struct ip_vs_dest *ip_vs_try_bind_dest(struct ip_vs_conn *cp);
 
 

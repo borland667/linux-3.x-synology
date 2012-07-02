@@ -85,7 +85,7 @@ static int __ip_vs_addr_is_local_v6(struct net *net,
 	};
 
 	rt = (struct rt6_info *)ip6_route_output(net, NULL, &fl6);
-	if (rt && rt->rt6i_dev && (rt->rt6i_dev->flags & IFF_LOOPBACK))
+	if (rt && rt->dst.dev && (rt->dst.dev->flags & IFF_LOOPBACK))
 		return 1;
 
 	return 0;
@@ -619,15 +619,21 @@ struct ip_vs_dest *ip_vs_find_dest(struct net  *net, int af,
 				   const union nf_inet_addr *daddr,
 				   __be16 dport,
 				   const union nf_inet_addr *vaddr,
-				   __be16 vport, __u16 protocol, __u32 fwmark)
+				   __be16 vport, __u16 protocol, __u32 fwmark,
+				   __u32 flags)
 {
 	struct ip_vs_dest *dest;
 	struct ip_vs_service *svc;
+	__be16 port = dport;
 
 	svc = ip_vs_service_get(net, af, fwmark, protocol, vaddr, vport);
 	if (!svc)
 		return NULL;
-	dest = ip_vs_lookup_dest(svc, daddr, dport);
+	if (fwmark && (flags & IP_VS_CONN_F_FWD_MASK) != IP_VS_CONN_F_MASQ)
+		port = 0;
+	dest = ip_vs_lookup_dest(svc, daddr, port);
+	if (!dest)
+		dest = ip_vs_lookup_dest(svc, daddr, port ^ dport);
 	if (dest)
 		atomic_inc(&dest->refcnt);
 	ip_vs_service_put(svc);
@@ -3674,7 +3680,7 @@ int __net_init ip_vs_control_net_init_sysctl(struct net *net)
 	return 0;
 }
 
-void __net_init ip_vs_control_net_cleanup_sysctl(struct net *net)
+void __net_exit ip_vs_control_net_cleanup_sysctl(struct net *net)
 {
 	struct netns_ipvs *ipvs = net_ipvs(net);
 
@@ -3686,7 +3692,7 @@ void __net_init ip_vs_control_net_cleanup_sysctl(struct net *net)
 #else
 
 int __net_init ip_vs_control_net_init_sysctl(struct net *net) { return 0; }
-void __net_init ip_vs_control_net_cleanup_sysctl(struct net *net) { }
+void __net_exit ip_vs_control_net_cleanup_sysctl(struct net *net) { }
 
 #endif
 
@@ -3744,20 +3750,9 @@ void __net_exit ip_vs_control_net_cleanup(struct net *net)
 	free_percpu(ipvs->tot_stats.cpustats);
 }
 
-int __init ip_vs_control_init(void)
+int __init ip_vs_register_nl_ioctl(void)
 {
-	int idx;
 	int ret;
-
-	EnterFunction(2);
-
-	/* Initialize svc_table, ip_vs_svc_fwm_table, rs_table */
-	for(idx = 0; idx < IP_VS_SVC_TAB_SIZE; idx++)  {
-		INIT_LIST_HEAD(&ip_vs_svc_table[idx]);
-		INIT_LIST_HEAD(&ip_vs_svc_fwm_table[idx]);
-	}
-
-	smp_wmb();	/* Do we really need it now ? */
 
 	ret = nf_register_sockopt(&ip_vs_sockopts);
 	if (ret) {
@@ -3770,20 +3765,41 @@ int __init ip_vs_control_init(void)
 		pr_err("cannot register Generic Netlink interface.\n");
 		goto err_genl;
 	}
-
-	ret = register_netdevice_notifier(&ip_vs_dst_notifier);
-	if (ret < 0)
-		goto err_notf;
-
-	LeaveFunction(2);
 	return 0;
 
-err_notf:
-	ip_vs_genl_unregister();
 err_genl:
 	nf_unregister_sockopt(&ip_vs_sockopts);
 err_sock:
 	return ret;
+}
+
+void ip_vs_unregister_nl_ioctl(void)
+{
+	ip_vs_genl_unregister();
+	nf_unregister_sockopt(&ip_vs_sockopts);
+}
+
+int __init ip_vs_control_init(void)
+{
+	int idx;
+	int ret;
+
+	EnterFunction(2);
+
+	/* Initialize svc_table, ip_vs_svc_fwm_table, rs_table */
+	for (idx = 0; idx < IP_VS_SVC_TAB_SIZE; idx++) {
+		INIT_LIST_HEAD(&ip_vs_svc_table[idx]);
+		INIT_LIST_HEAD(&ip_vs_svc_fwm_table[idx]);
+	}
+
+	smp_wmb();	/* Do we really need it now ? */
+
+	ret = register_netdevice_notifier(&ip_vs_dst_notifier);
+	if (ret < 0)
+		return ret;
+
+	LeaveFunction(2);
+	return 0;
 }
 
 
@@ -3791,7 +3807,5 @@ void ip_vs_control_cleanup(void)
 {
 	EnterFunction(2);
 	unregister_netdevice_notifier(&ip_vs_dst_notifier);
-	ip_vs_genl_unregister();
-	nf_unregister_sockopt(&ip_vs_sockopts);
 	LeaveFunction(2);
 }

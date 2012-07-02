@@ -563,6 +563,7 @@ rx_next:
 		if (cpr16(IntrStatus) & cp_rx_intr_mask)
 			goto rx_status_loop;
 
+		napi_gro_flush(napi);
 		spin_lock_irqsave(&cp->lock, flags);
 		__napi_complete(napi);
 		cpw16_f(IntrMask, cp_intr_mask);
@@ -859,7 +860,6 @@ static void __cp_set_rx_mode (struct net_device *dev)
 	struct cp_private *cp = netdev_priv(dev);
 	u32 mc_filter[2];	/* Multicast hash filter */
 	int rx_mode;
-	u32 tmp;
 
 	/* Note: do not reorder, GCC is clever about common statements. */
 	if (dev->flags & IFF_PROMISC) {
@@ -886,11 +886,9 @@ static void __cp_set_rx_mode (struct net_device *dev)
 	}
 
 	/* We can safely update without stopping the chip. */
-	tmp = cp_rx_config | rx_mode;
-	if (cp->rx_config != tmp) {
-		cpw32_f (RxConfig, tmp);
-		cp->rx_config = tmp;
-	}
+	cp->rx_config = cp_rx_config | rx_mode;
+	cpw32_f(RxConfig, cp->rx_config);
+
 	cpw32_f (MAR0 + 0, mc_filter[0]);
 	cpw32_f (MAR0 + 4, mc_filter[1]);
 }
@@ -960,6 +958,11 @@ static inline void cp_start_hw (struct cp_private *cp)
 	cpw8(Cmd, RxOn | TxOn);
 }
 
+static void cp_enable_irq(struct cp_private *cp)
+{
+	cpw16_f(IntrMask, cp_intr_mask);
+}
+
 static void cp_init_hw (struct cp_private *cp)
 {
 	struct net_device *dev = cp->dev;
@@ -998,8 +1001,6 @@ static void cp_init_hw (struct cp_private *cp)
 	cpw32_f(TxRingAddr + 4, (ring_dma >> 16) >> 16);
 
 	cpw16(MultiIntr, 0);
-
-	cpw16_f(IntrMask, cp_intr_mask);
 
 	cpw8_f(Cfg9346, Cfg9346_Lock);
 }
@@ -1131,6 +1132,8 @@ static int cp_open (struct net_device *dev)
 	rc = request_irq(dev->irq, cp_interrupt, IRQF_SHARED, dev->name, dev);
 	if (rc)
 		goto err_out_hw;
+
+	cp_enable_irq(cp);
 
 	netif_carrier_off(dev);
 	mii_check_media(&cp->mii_if, netif_msg_link(cp), true);
@@ -1319,9 +1322,9 @@ static void cp_get_drvinfo (struct net_device *dev, struct ethtool_drvinfo *info
 {
 	struct cp_private *cp = netdev_priv(dev);
 
-	strcpy (info->driver, DRV_NAME);
-	strcpy (info->version, DRV_VERSION);
-	strcpy (info->bus_info, pci_name(cp->pdev));
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
+	strlcpy(info->bus_info, pci_name(cp->pdev), sizeof(info->bus_info));
 }
 
 static void cp_get_ringparam(struct net_device *dev,
@@ -1392,7 +1395,7 @@ static void cp_set_msglevel(struct net_device *dev, u32 value)
 	cp->msg_enable = value;
 }
 
-static int cp_set_features(struct net_device *dev, u32 features)
+static int cp_set_features(struct net_device *dev, netdev_features_t features)
 {
 	struct cp_private *cp = netdev_priv(dev);
 	unsigned long flags;
@@ -1589,7 +1592,7 @@ static int cp_set_mac_address(struct net_device *dev, void *p)
    No extra delay is needed with 33Mhz PCI, but 66Mhz may change this.
  */
 
-#define eeprom_delay()	readl(ee_addr)
+#define eeprom_delay()	readb(ee_addr)
 
 /* The EEPROM commands include the alway-set leading bit. */
 #define EE_EXTEND_CMD	(4)
@@ -2033,6 +2036,7 @@ static int cp_resume (struct pci_dev *pdev)
 	/* FIXME: sh*t may happen if the Rx ring buffer is depleted */
 	cp_init_rings_index (cp);
 	cp_init_hw (cp);
+	cp_enable_irq(cp);
 	netif_start_queue (dev);
 
 	spin_lock_irqsave (&cp->lock, flags);

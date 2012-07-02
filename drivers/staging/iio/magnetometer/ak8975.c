@@ -108,7 +108,8 @@ static const int ak8975_index_to_reg[] = {
 static int ak8975_write_data(struct i2c_client *client,
 			     u8 reg, u8 val, u8 mask, u8 shift)
 {
-	struct ak8975_data *data = i2c_get_clientdata(client);
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	struct ak8975_data *data = iio_priv(indio_dev);
 	u8 regval;
 	int ret;
 
@@ -159,7 +160,8 @@ static int ak8975_read_data(struct i2c_client *client,
  */
 static int ak8975_setup(struct i2c_client *client)
 {
-	struct ak8975_data *data = i2c_get_clientdata(client);
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	struct ak8975_data *data = iio_priv(indio_dev);
 	u8 device_id;
 	int ret;
 
@@ -431,7 +433,7 @@ static int ak8975_read_raw(struct iio_dev *indio_dev,
 	switch (mask) {
 	case 0:
 		return ak8975_read_axis(indio_dev, chan->address, val);
-	case (1 << IIO_CHAN_INFO_SCALE_SEPARATE):
+	case IIO_CHAN_INFO_SCALE:
 		*val = data->raw_to_gauss[chan->address];
 		return IIO_VAL_INT;
 	}
@@ -443,7 +445,7 @@ static int ak8975_read_raw(struct iio_dev *indio_dev,
 		.type = IIO_MAGN,					\
 		.modified = 1,						\
 		.channel2 = IIO_MOD_##axis,				\
-		.info_mask = (1 << IIO_CHAN_INFO_SCALE_SEPARATE),	\
+		.info_mask = IIO_CHAN_INFO_SCALE_SEPARATE_BIT,	\
 		.address = index,					\
 	}
 
@@ -509,6 +511,7 @@ static int ak8975_probe(struct i2c_client *client,
 		goto exit_gpio;
 	}
 	data = iio_priv(indio_dev);
+	i2c_set_clientdata(client, indio_dev);
 	/* Perform some basic start-of-day setup of the device. */
 	err = ak8975_setup(client);
 	if (err < 0) {
@@ -516,7 +519,6 @@ static int ak8975_probe(struct i2c_client *client,
 		goto exit_free_iio;
 	}
 
-	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
 	mutex_init(&data->lock);
 	data->eoc_irq = client->irq;
@@ -564,27 +566,23 @@ static const struct i2c_device_id ak8975_id[] = {
 
 MODULE_DEVICE_TABLE(i2c, ak8975_id);
 
+static const struct of_device_id ak8975_of_match[] = {
+	{ .compatible = "asahi-kasei,ak8975", },
+	{ .compatible = "ak8975", },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, ak8975_of_match);
+
 static struct i2c_driver ak8975_driver = {
 	.driver = {
 		.name	= "ak8975",
+		.of_match_table = ak8975_of_match,
 	},
 	.probe		= ak8975_probe,
 	.remove		= __devexit_p(ak8975_remove),
 	.id_table	= ak8975_id,
 };
-
-static int __init ak8975_init(void)
-{
-	return i2c_add_driver(&ak8975_driver);
-}
-
-static void __exit ak8975_exit(void)
-{
-	i2c_del_driver(&ak8975_driver);
-}
-
-module_init(ak8975_init);
-module_exit(ak8975_exit);
+module_i2c_driver(ak8975_driver);
 
 MODULE_AUTHOR("Laxman Dewangan <ldewangan@nvidia.com>");
 MODULE_DESCRIPTION("AK8975 magnetometer driver");

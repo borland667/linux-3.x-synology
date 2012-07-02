@@ -20,13 +20,14 @@
 #include <linux/init.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
 #include <linux/sched.h>
 
 #include <asm/irq.h>
 #include <asm/proc-fns.h>
+#include <asm/system_misc.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
@@ -45,6 +46,7 @@
 #include <plat/iic-core.h>
 #include <plat/onenand-core.h>
 #include <plat/regs-serial.h>
+#include <plat/watchdog-reset.h>
 
 #include "common.h"
 
@@ -128,14 +130,6 @@ static struct map_desc s5pc100_iodesc[] __initdata = {
 	}
 };
 
-static void s5pc100_idle(void)
-{
-	if (!need_resched())
-		cpu_do_idle();
-
-	local_irq_enable();
-}
-
 /*
  * s5pc100_map_io
  *
@@ -191,28 +185,25 @@ void __init s5pc100_init_irq(void)
 	s5p_init_irq(vic, ARRAY_SIZE(vic));
 }
 
-static struct sysdev_class s5pc100_sysclass = {
-	.name	= "s5pc100-core",
+static struct bus_type s5pc100_subsys = {
+	.name		= "s5pc100-core",
+	.dev_name	= "s5pc100-core",
 };
 
-static struct sys_device s5pc100_sysdev = {
-	.cls	= &s5pc100_sysclass,
+static struct device s5pc100_dev = {
+	.bus	= &s5pc100_subsys,
 };
 
 static int __init s5pc100_core_init(void)
 {
-	return sysdev_class_register(&s5pc100_sysclass);
+	return subsys_system_register(&s5pc100_subsys, NULL);
 }
 core_initcall(s5pc100_core_init);
 
 int __init s5pc100_init(void)
 {
 	printk(KERN_INFO "S5PC100: Initializing architecture\n");
-
-	/* set idle function */
-	pm_idle = s5pc100_idle;
-
-	return sysdev_register(&s5pc100_sysdev);
+	return device_register(&s5pc100_dev);
 }
 
 /* uart registration process */
@@ -220,4 +211,12 @@ int __init s5pc100_init(void)
 void __init s5pc100_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 {
 	s3c24xx_init_uartdevs("s3c6400-uart", s5p_uart_resources, cfg, no);
+}
+
+void s5pc100_restart(char mode, const char *cmd)
+{
+	if (mode != 's')
+		arch_wdt_reset();
+
+	soft_restart(0);
 }

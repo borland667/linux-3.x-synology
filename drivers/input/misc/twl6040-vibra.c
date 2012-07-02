@@ -28,7 +28,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
-#include <linux/i2c/twl.h>
+#include <linux/input.h>
 #include <linux/mfd/twl6040.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
@@ -257,7 +257,7 @@ static SIMPLE_DEV_PM_OPS(twl6040_vibra_pm_ops, twl6040_vibra_suspend, NULL);
 
 static int __devinit twl6040_vibra_probe(struct platform_device *pdev)
 {
-	struct twl4030_vibra_data *pdata = pdev->dev.platform_data;
+	struct twl6040_vibra_data *pdata = pdev->dev.platform_data;
 	struct vibra_info *info;
 	int ret;
 
@@ -410,18 +410,7 @@ static struct platform_driver twl6040_vibra_driver = {
 		.pm	= &twl6040_vibra_pm_ops,
 	},
 };
-
-static int __init twl6040_vibra_init(void)
-{
-	return platform_driver_register(&twl6040_vibra_driver);
-}
-module_init(twl6040_vibra_init);
-
-static void __exit twl6040_vibra_exit(void)
-{
-	platform_driver_unregister(&twl6040_vibra_driver);
-}
-module_exit(twl6040_vibra_exit);
+module_platform_driver(twl6040_vibra_driver);
 
 MODULE_ALIAS("platform:twl6040-vibra");
 MODULE_DESCRIPTION("TWL6040 Vibra driver");

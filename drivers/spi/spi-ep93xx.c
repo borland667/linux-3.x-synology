@@ -545,7 +545,7 @@ static void ep93xx_spi_pio_transfer(struct ep93xx_spi *espi)
  * in case of failure.
  */
 static struct dma_async_tx_descriptor *
-ep93xx_spi_dma_prepare(struct ep93xx_spi *espi, enum dma_data_direction dir)
+ep93xx_spi_dma_prepare(struct ep93xx_spi *espi, enum dma_transfer_direction dir)
 {
 	struct spi_transfer *t = espi->current_msg->state;
 	struct dma_async_tx_descriptor *txd;
@@ -566,7 +566,7 @@ ep93xx_spi_dma_prepare(struct ep93xx_spi *espi, enum dma_data_direction dir)
 	memset(&conf, 0, sizeof(conf));
 	conf.direction = dir;
 
-	if (dir == DMA_FROM_DEVICE) {
+	if (dir == DMA_DEV_TO_MEM) {
 		chan = espi->dma_rx;
 		buf = t->rx_buf;
 		sgt = &espi->rx_sgt;
@@ -630,8 +630,7 @@ ep93xx_spi_dma_prepare(struct ep93xx_spi *espi, enum dma_data_direction dir)
 	if (!nents)
 		return ERR_PTR(-ENOMEM);
 
-	txd = chan->device->device_prep_slave_sg(chan, sgt->sgl, nents,
-						 dir, DMA_CTRL_ACK);
+	txd = dmaengine_prep_slave_sg(chan, sgt->sgl, nents, dir, DMA_CTRL_ACK);
 	if (!txd) {
 		dma_unmap_sg(chan->device->dev, sgt->sgl, sgt->nents, dir);
 		return ERR_PTR(-ENOMEM);
@@ -648,12 +647,12 @@ ep93xx_spi_dma_prepare(struct ep93xx_spi *espi, enum dma_data_direction dir)
  * unmapped.
  */
 static void ep93xx_spi_dma_finish(struct ep93xx_spi *espi,
-				  enum dma_data_direction dir)
+				  enum dma_transfer_direction dir)
 {
 	struct dma_chan *chan;
 	struct sg_table *sgt;
 
-	if (dir == DMA_FROM_DEVICE) {
+	if (dir == DMA_DEV_TO_MEM) {
 		chan = espi->dma_rx;
 		sgt = &espi->rx_sgt;
 	} else {
@@ -674,16 +673,16 @@ static void ep93xx_spi_dma_transfer(struct ep93xx_spi *espi)
 	struct spi_message *msg = espi->current_msg;
 	struct dma_async_tx_descriptor *rxd, *txd;
 
-	rxd = ep93xx_spi_dma_prepare(espi, DMA_FROM_DEVICE);
+	rxd = ep93xx_spi_dma_prepare(espi, DMA_DEV_TO_MEM);
 	if (IS_ERR(rxd)) {
 		dev_err(&espi->pdev->dev, "DMA RX failed: %ld\n", PTR_ERR(rxd));
 		msg->status = PTR_ERR(rxd);
 		return;
 	}
 
-	txd = ep93xx_spi_dma_prepare(espi, DMA_TO_DEVICE);
+	txd = ep93xx_spi_dma_prepare(espi, DMA_MEM_TO_DEV);
 	if (IS_ERR(txd)) {
-		ep93xx_spi_dma_finish(espi, DMA_FROM_DEVICE);
+		ep93xx_spi_dma_finish(espi, DMA_DEV_TO_MEM);
 		dev_err(&espi->pdev->dev, "DMA TX failed: %ld\n", PTR_ERR(rxd));
 		msg->status = PTR_ERR(txd);
 		return;
@@ -702,8 +701,8 @@ static void ep93xx_spi_dma_transfer(struct ep93xx_spi *espi)
 
 	wait_for_completion(&espi->wait);
 
-	ep93xx_spi_dma_finish(espi, DMA_TO_DEVICE);
-	ep93xx_spi_dma_finish(espi, DMA_FROM_DEVICE);
+	ep93xx_spi_dma_finish(espi, DMA_MEM_TO_DEV);
+	ep93xx_spi_dma_finish(espi, DMA_DEV_TO_MEM);
 }
 
 /**
@@ -979,7 +978,7 @@ static int ep93xx_spi_setup_dma(struct ep93xx_spi *espi)
 	dma_cap_set(DMA_SLAVE, mask);
 
 	espi->dma_rx_data.port = EP93XX_DMA_SSP;
-	espi->dma_rx_data.direction = DMA_FROM_DEVICE;
+	espi->dma_rx_data.direction = DMA_DEV_TO_MEM;
 	espi->dma_rx_data.name = "ep93xx-spi-rx";
 
 	espi->dma_rx = dma_request_channel(mask, ep93xx_spi_dma_filter,
@@ -990,7 +989,7 @@ static int ep93xx_spi_setup_dma(struct ep93xx_spi *espi)
 	}
 
 	espi->dma_tx_data.port = EP93XX_DMA_SSP;
-	espi->dma_tx_data.direction = DMA_TO_DEVICE;
+	espi->dma_tx_data.direction = DMA_MEM_TO_DEV;
 	espi->dma_tx_data.name = "ep93xx-spi-tx";
 
 	espi->dma_tx = dma_request_channel(mask, ep93xx_spi_dma_filter,

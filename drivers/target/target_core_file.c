@@ -37,8 +37,7 @@
 #include <scsi/scsi_host.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_transport.h>
+#include <target/target_core_backend.h>
 
 #include "target_core_file.h"
 
@@ -86,7 +85,7 @@ static void fd_detach_hba(struct se_hba *hba)
 static void *fd_allocate_virtdevice(struct se_hba *hba, const char *name)
 {
 	struct fd_dev *fd_dev;
-	struct fd_host *fd_host = (struct fd_host *) hba->hba_ptr;
+	struct fd_host *fd_host = hba->hba_ptr;
 
 	fd_dev = kzalloc(sizeof(struct fd_dev), GFP_KERNEL);
 	if (!fd_dev) {
@@ -114,8 +113,8 @@ static struct se_device *fd_create_virtdevice(
 	struct se_device *dev;
 	struct se_dev_limits dev_limits;
 	struct queue_limits *limits;
-	struct fd_dev *fd_dev = (struct fd_dev *) p;
-	struct fd_host *fd_host = (struct fd_host *) hba->hba_ptr;
+	struct fd_dev *fd_dev = p;
+	struct fd_host *fd_host = hba->hba_ptr;
 	mm_segment_t old_fs;
 	struct file *file;
 	struct inode *inode = NULL;
@@ -170,6 +169,7 @@ static struct se_device *fd_create_virtdevice(
 	inode = file->f_mapping->host;
 	if (S_ISBLK(inode->i_mode)) {
 		struct request_queue *q;
+		unsigned long long dev_size;
 		/*
 		 * Setup the local scope queue_limits from struct request_queue->limits
 		 * to pass into transport_add_device_to_core_hba() as struct se_dev_limits.
@@ -184,13 +184,12 @@ static struct se_device *fd_create_virtdevice(
 		 * one (1) logical sector from underlying struct block_device
 		 */
 		fd_dev->fd_block_size = bdev_logical_block_size(inode->i_bdev);
-		fd_dev->fd_dev_size = (i_size_read(file->f_mapping->host) -
+		dev_size = (i_size_read(file->f_mapping->host) -
 				       fd_dev->fd_block_size);
 
 		pr_debug("FILEIO: Using size: %llu bytes from struct"
 			" block_device blocks: %llu logical_block_size: %d\n",
-			fd_dev->fd_dev_size,
-			div_u64(fd_dev->fd_dev_size, fd_dev->fd_block_size),
+			dev_size, div_u64(dev_size, fd_dev->fd_block_size),
 			fd_dev->fd_block_size);
 	} else {
 		if (!(fd_dev->fbd_flags & FBDF_HAS_SIZE)) {
@@ -240,7 +239,7 @@ fail:
  */
 static void fd_free_device(void *p)
 {
-	struct fd_dev *fd_dev = (struct fd_dev *) p;
+	struct fd_dev *fd_dev = p;
 
 	if (fd_dev->fd_file) {
 		filp_close(fd_dev->fd_file, NULL);
@@ -498,7 +497,7 @@ static ssize_t fd_set_configfs_dev_params(
 
 	orig = opts;
 
-	while ((ptr = strsep(&opts, ",")) != NULL) {
+	while ((ptr = strsep(&opts, ",\n")) != NULL) {
 		if (!*ptr)
 			continue;
 
@@ -559,7 +558,7 @@ out:
 
 static ssize_t fd_check_configfs_dev_params(struct se_hba *hba, struct se_subsystem_dev *se_dev)
 {
-	struct fd_dev *fd_dev = (struct fd_dev *) se_dev->se_dev_su_ptr;
+	struct fd_dev *fd_dev = se_dev->se_dev_su_ptr;
 
 	if (!(fd_dev->fbd_flags & FBDF_HAS_PATH)) {
 		pr_err("Missing fd_dev_name=\n");
@@ -606,10 +605,20 @@ static u32 fd_get_device_type(struct se_device *dev)
 static sector_t fd_get_blocks(struct se_device *dev)
 {
 	struct fd_dev *fd_dev = dev->dev_ptr;
-	unsigned long long blocks_long = div_u64(fd_dev->fd_dev_size,
-			dev->se_sub_dev->se_dev_attrib.block_size);
+	struct file *f = fd_dev->fd_file;
+	struct inode *i = f->f_mapping->host;
+	unsigned long long dev_size;
+	/*
+	 * When using a file that references an underlying struct block_device,
+	 * ensure dev_size is always based on the current inode size in order
+	 * to handle underlying block_device resize operations.
+	 */
+	if (S_ISBLK(i->i_mode))
+		dev_size = (i_size_read(i) - fd_dev->fd_block_size);
+	else
+		dev_size = fd_dev->fd_dev_size;
 
-	return blocks_long;
+	return div_u64(dev_size, dev->se_sub_dev->se_dev_attrib.block_size);
 }
 
 static struct se_subsystem_api fileio_template = {
