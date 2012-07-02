@@ -767,6 +767,18 @@ static void __init synology_init(void){
 	panic_timeout = 10;
 }
 
+#ifdef CONFIG_MACH_SYNOLOGY
+MACHINE_START(SYNOLOGY, "Synology DiskStation / RackStation")
+	.boot_params	= 0x100,
+	.init_machine	= synology_init,
+	.map_io		= kirkwood_map_io,
+	.init_early	= kirkwood_init_early,
+	.init_irq	= kirkwood_init_irq,
+	.timer		= &kirkwood_timer,
+MACHINE_END
+#endif
+
+#ifdef CONFIG_MACH_SYNOLOGY_6282
 MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
 	.boot_params	= 0x100,
 	.init_machine	= synology_init,
@@ -775,4 +787,5 @@ MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
 	.init_irq	= kirkwood_init_irq,
 	.timer		= &kirkwood_timer,
 MACHINE_END
+#endif
 
