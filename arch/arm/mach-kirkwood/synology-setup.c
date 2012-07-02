@@ -755,7 +755,6 @@ static void __init synology_init(void){
 		}
 
 		pm_power_off = synology_power_off;
-		arm_pm_restart = synology_restart;
 	} else if (synology_machine_name[0] != 0){
 		synology_append_mpp_config(&synology_628x_mpp_config);
 		kirkwood_mpp_conf(synology_mpp_config);
@@ -774,5 +773,6 @@ MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
 	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
 	.timer		= &kirkwood_timer,
+	.restart	= synology_restart,
 MACHINE_END
 
