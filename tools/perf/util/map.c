@@ -38,6 +38,7 @@ void map__init(struct map *self, enum map_type type,
 	RB_CLEAR_NODE(&self->rb_node);
 	self->groups   = NULL;
 	self->referenced = false;
+	self->erange_warned = false;
 }
 
 struct map *map__new(struct list_head *dsos__list, u64 start, u64 len,
@@ -210,6 +211,21 @@ size_t map__fprintf(struct map *self, FILE *fp)
 {
 	return fprintf(fp, " %" PRIx64 "-%" PRIx64 " %" PRIx64 " %s\n",
 		       self->start, self->end, self->pgoff, self->dso->name);
+}
+
+size_t map__fprintf_dsoname(struct map *map, FILE *fp)
+{
+	const char *dsoname;
+
+	if (map && map->dso && (map->dso->name || map->dso->long_name)) {
+		if (symbol_conf.show_kernel_path && map->dso->long_name)
+			dsoname = map->dso->long_name;
+		else if (map->dso->name)
+			dsoname = map->dso->name;
+	} else
+		dsoname = "[unknown]";
+
+	return fprintf(fp, "%s", dsoname);
 }
 
 /*
@@ -561,6 +577,10 @@ int machine__init(struct machine *self, const char *root_dir, pid_t pid)
 	RB_CLEAR_NODE(&self->rb_node);
 	INIT_LIST_HEAD(&self->user_dsos);
 	INIT_LIST_HEAD(&self->kernel_dsos);
+
+	self->threads = RB_ROOT;
+	INIT_LIST_HEAD(&self->dead_threads);
+	self->last_match = NULL;
 
 	self->kmaps.machine = self;
 	self->pid	    = pid;

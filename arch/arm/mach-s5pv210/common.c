@@ -18,7 +18,7 @@
 #include <linux/module.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/sched.h>
 #include <linux/dma-mapping.h>
@@ -35,7 +35,6 @@
 #include <plat/cpu.h>
 #include <plat/clock.h>
 #include <plat/devs.h>
-#include <plat/reset.h>
 #include <plat/sdhci.h>
 #include <plat/adc-core.h>
 #include <plat/ata-core.h>
@@ -143,15 +142,7 @@ static struct map_desc s5pv210_iodesc[] __initdata = {
 	}
 };
 
-static void s5pv210_idle(void)
-{
-	if (!need_resched())
-		cpu_do_idle();
-
-	local_irq_enable();
-}
-
-static void s5pv210_sw_reset(void)
+void s5pv210_restart(char mode, const char *cmd)
 {
 	__raw_writel(0x1, S5P_SWRESET);
 }
@@ -230,55 +221,30 @@ void __init s5pv210_init_irq(void)
 	s5p_init_irq(vic, ARRAY_SIZE(vic));
 }
 
-struct sysdev_class s5pv210_sysclass = {
-	.name	= "s5pv210-core",
+struct bus_type s5pv210_subsys = {
+	.name		= "s5pv210-core",
+	.dev_name	= "s5pv210-core",
 };
 
-static struct sys_device s5pv210_sysdev = {
-	.cls	= &s5pv210_sysclass,
+static struct device s5pv210_dev = {
+	.bus	= &s5pv210_subsys,
 };
 
 static int __init s5pv210_core_init(void)
 {
-	return sysdev_class_register(&s5pv210_sysclass);
+	return subsys_system_register(&s5pv210_subsys, NULL);
 }
 core_initcall(s5pv210_core_init);
 
 int __init s5pv210_init(void)
 {
 	printk(KERN_INFO "S5PV210: Initializing architecture\n");
-
-	/* set idle function */
-	pm_idle = s5pv210_idle;
-
-	/* set sw_reset function */
-	s5p_reset_hook = s5pv210_sw_reset;
-
-	return sysdev_register(&s5pv210_sysdev);
+	return device_register(&s5pv210_dev);
 }
-
-static struct s3c24xx_uart_clksrc s5pv210_serial_clocks[] = {
-	[0] = {
-		.name		= "pclk",
-		.divisor	= 1,
-		.min_baud	= 0,
-		.max_baud	= 0,
-	},
-};
 
 /* uart registration process */
 
 void __init s5pv210_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 {
-	struct s3c2410_uartcfg *tcfg = cfg;
-	u32 ucnt;
-
-	for (ucnt = 0; ucnt < no; ucnt++, tcfg++) {
-		if (!tcfg->clocks) {
-			tcfg->clocks = s5pv210_serial_clocks;
-			tcfg->clocks_size = ARRAY_SIZE(s5pv210_serial_clocks);
-		}
-	}
-
 	s3c24xx_init_uartdevs("s5pv210-uart", s5p_uart_resources, cfg, no);
 }
