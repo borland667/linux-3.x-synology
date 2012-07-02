@@ -768,7 +768,7 @@ static void __init synology_init(void){
 }
 
 MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
-	.boot_params	= 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= synology_init,
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
