@@ -49,8 +49,8 @@ static int __init early_initrd(char *p)
 	if (*endp == ',') {
 		size = memparse(endp + 1, NULL);
 
+		phys_initrd_start = start;
 		if (phys_initrd_size == 0){
-			phys_initrd_start = start;
 			phys_initrd_size = size;
 		}
 	}
@@ -62,6 +62,9 @@ early_param("initrd", early_initrd);
  * Some custom versions of u-boot put the source address of the 
  * initrd, rather than the load address (which they still copy to)
  * into the ATAG_INITRD2 tag.
+ *
+ * FIXME: This doesn't work - perhaps due to the source being
+ *        SPI flash?
  */
 static void __init fixup_uboot_initrd_start_addr(void){
 	void __iomem *src;
@@ -120,7 +123,7 @@ static int __init parse_tag_initrd2(const struct tag *tag)
 {
 	phys_initrd_start = tag->u.initrd.start;
 	phys_initrd_size = tag->u.initrd.size;
-	fixup_uboot_initrd_start_addr();
+	//fixup_uboot_initrd_start_addr();
 	return 0;
 }
 
