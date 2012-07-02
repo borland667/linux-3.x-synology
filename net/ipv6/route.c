@@ -26,6 +26,7 @@
 
 #include <linux/capability.h>
 #include <linux/errno.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/times.h>
 #include <linux/socket.h>
@@ -76,7 +77,7 @@ static struct rt6_info *ip6_rt_copy(const struct rt6_info *ort,
 				    const struct in6_addr *dest);
 static struct dst_entry	*ip6_dst_check(struct dst_entry *dst, u32 cookie);
 static unsigned int	 ip6_default_advmss(const struct dst_entry *dst);
-static unsigned int	 ip6_default_mtu(const struct dst_entry *dst);
+static unsigned int	 ip6_mtu(const struct dst_entry *dst);
 static struct dst_entry *ip6_negative_advice(struct dst_entry *);
 static void		ip6_dst_destroy(struct dst_entry *);
 static void		ip6_dst_ifdown(struct dst_entry *,
@@ -103,6 +104,9 @@ static u32 *ipv6_cow_metrics(struct dst_entry *dst, unsigned long old)
 	struct rt6_info *rt = (struct rt6_info *) dst;
 	struct inet_peer *peer;
 	u32 *p = NULL;
+
+	if (!(rt->dst.flags & DST_HOST))
+		return NULL;
 
 	if (!rt->rt6i_peer)
 		rt6_bind_peer(rt, 1);
@@ -140,7 +144,7 @@ static struct dst_ops ip6_dst_ops_template = {
 	.gc_thresh		=	1024,
 	.check			=	ip6_dst_check,
 	.default_advmss		=	ip6_default_advmss,
-	.default_mtu		=	ip6_default_mtu,
+	.mtu			=	ip6_mtu,
 	.cow_metrics		=	ipv6_cow_metrics,
 	.destroy		=	ip6_dst_destroy,
 	.ifdown			=	ip6_dst_ifdown,
@@ -151,9 +155,11 @@ static struct dst_ops ip6_dst_ops_template = {
 	.neigh_lookup		=	ip6_neigh_lookup,
 };
 
-static unsigned int ip6_blackhole_default_mtu(const struct dst_entry *dst)
+static unsigned int ip6_blackhole_mtu(const struct dst_entry *dst)
 {
-	return 0;
+	unsigned int mtu = dst_metric_raw(dst, RTAX_MTU);
+
+	return mtu ? : dst->dev->mtu;
 }
 
 static void ip6_rt_blackhole_update_pmtu(struct dst_entry *dst, u32 mtu)
@@ -171,7 +177,7 @@ static struct dst_ops ip6_dst_blackhole_ops = {
 	.protocol		=	cpu_to_be16(ETH_P_IPV6),
 	.destroy		=	ip6_dst_destroy,
 	.check			=	ip6_dst_check,
-	.default_mtu		=	ip6_blackhole_default_mtu,
+	.mtu			=	ip6_blackhole_mtu,
 	.default_advmss		=	ip6_default_advmss,
 	.update_pmtu		=	ip6_rt_blackhole_update_pmtu,
 	.cow_metrics		=	ip6_rt_blackhole_cow_metrics,
@@ -241,7 +247,9 @@ static inline struct rt6_info *ip6_dst_alloc(struct dst_ops *ops,
 {
 	struct rt6_info *rt = dst_alloc(ops, dev, 0, 0, flags);
 
-	memset(&rt->rt6i_table, 0, sizeof(*rt) - sizeof(struct dst_entry));
+	if (rt != NULL)
+		memset(&rt->rt6i_table, 0,
+			sizeof(*rt) - sizeof(struct dst_entry));
 
 	return rt;
 }
@@ -251,6 +259,9 @@ static void ip6_dst_destroy(struct dst_entry *dst)
 	struct rt6_info *rt = (struct rt6_info *)dst;
 	struct inet6_dev *idev = rt->rt6i_idev;
 	struct inet_peer *peer = rt->rt6i_peer;
+
+	if (!(rt->dst.flags & DST_HOST))
+		dst_destroy_metrics_generic(dst);
 
 	if (idev != NULL) {
 		rt->rt6i_idev = NULL;
@@ -717,15 +728,13 @@ static struct rt6_info *rt6_alloc_cow(const struct rt6_info *ort,
 		int attempts = !in_softirq();
 
 		if (!(rt->rt6i_flags&RTF_GATEWAY)) {
-			if (rt->rt6i_dst.plen != 128 &&
+			if (ort->rt6i_dst.plen != 128 &&
 			    ipv6_addr_equal(&ort->rt6i_dst.addr, daddr))
 				rt->rt6i_flags |= RTF_ANYCAST;
 			ipv6_addr_copy(&rt->rt6i_gateway, daddr);
 		}
 
-		rt->rt6i_dst.plen = 128;
 		rt->rt6i_flags |= RTF_CACHE;
-		rt->dst.flags |= DST_HOST;
 
 #ifdef CONFIG_IPV6_SUBTREES
 		if (rt->rt6i_src.plen && saddr) {
@@ -775,9 +784,7 @@ static struct rt6_info *rt6_alloc_clone(struct rt6_info *ort,
 	struct rt6_info *rt = ip6_rt_copy(ort, daddr);
 
 	if (rt) {
-		rt->rt6i_dst.plen = 128;
 		rt->rt6i_flags |= RTF_CACHE;
-		rt->dst.flags |= DST_HOST;
 		dst_set_neighbour(&rt->dst, neigh_clone(dst_get_neighbour_raw(&ort->dst)));
 	}
 	return rt;
@@ -1036,10 +1043,15 @@ static unsigned int ip6_default_advmss(const struct dst_entry *dst)
 	return mtu;
 }
 
-static unsigned int ip6_default_mtu(const struct dst_entry *dst)
+static unsigned int ip6_mtu(const struct dst_entry *dst)
 {
-	unsigned int mtu = IPV6_MIN_MTU;
 	struct inet6_dev *idev;
+	unsigned int mtu = dst_metric_raw(dst, RTAX_MTU);
+
+	if (mtu)
+		return mtu;
+
+	mtu = IPV6_MIN_MTU;
 
 	rcu_read_lock();
 	idev = __in6_dev_get(dst->dev);
@@ -1078,12 +1090,14 @@ struct dst_entry *icmp6_dst_alloc(struct net_device *dev,
 			neigh = NULL;
 	}
 
-	rt->rt6i_idev     = idev;
+	rt->dst.flags |= DST_HOST;
+	rt->dst.output  = ip6_output;
 	dst_set_neighbour(&rt->dst, neigh);
 	atomic_set(&rt->dst.__refcnt, 1);
 	ipv6_addr_copy(&rt->rt6i_dst.addr, addr);
+	rt->rt6i_dst.plen = 128;
+	rt->rt6i_idev     = idev;
 	dst_metric_set(&rt->dst, RTAX_HOPLIMIT, 255);
-	rt->dst.output  = ip6_output;
 
 	spin_lock_bh(&icmp6_dst_lock);
 	rt->dst.next = icmp6_dst_gc_list;
@@ -1261,6 +1275,14 @@ int ip6_route_add(struct fib6_config *cfg)
 	if (rt->rt6i_dst.plen == 128)
 	       rt->dst.flags |= DST_HOST;
 
+	if (!(rt->dst.flags & DST_HOST) && cfg->fc_mx) {
+		u32 *metrics = kzalloc(sizeof(u32) * RTAX_MAX, GFP_KERNEL);
+		if (!metrics) {
+			err = -ENOMEM;
+			goto out;
+		}
+		dst_init_metrics(&rt->dst, metrics, 0);
+	}
 #ifdef CONFIG_IPV6_SUBTREES
 	ipv6_addr_prefix(&rt->rt6i_src.addr, &cfg->fc_src, cfg->fc_src_len);
 	rt->rt6i_src.plen = cfg->fc_src_len;
@@ -1607,9 +1629,6 @@ void rt6_redirect(const struct in6_addr *dest, const struct in6_addr *src,
 	if (on_link)
 		nrt->rt6i_flags &= ~RTF_GATEWAY;
 
-	nrt->rt6i_dst.plen = 128;
-	nrt->dst.flags |= DST_HOST;
-
 	ipv6_addr_copy(&nrt->rt6i_gateway, (struct in6_addr*)neigh->primary_key);
 	dst_set_neighbour(&nrt->dst, neigh_clone(neigh));
 
@@ -1754,9 +1773,10 @@ static struct rt6_info *ip6_rt_copy(const struct rt6_info *ort,
 	if (rt) {
 		rt->dst.input = ort->dst.input;
 		rt->dst.output = ort->dst.output;
+		rt->dst.flags |= DST_HOST;
 
 		ipv6_addr_copy(&rt->rt6i_dst.addr, dest);
-		rt->rt6i_dst.plen = ort->rt6i_dst.plen;
+		rt->rt6i_dst.plen = 128;
 		dst_copy_metrics(&rt->dst, &ort->dst);
 		rt->dst.error = ort->dst.error;
 		rt->rt6i_idev = ort->rt6i_idev;

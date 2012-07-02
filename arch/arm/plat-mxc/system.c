@@ -21,12 +21,16 @@
 #include <linux/io.h>
 #include <linux/err.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 
 #include <mach/hardware.h>
 #include <mach/common.h>
 #include <asm/proc-fns.h>
 #include <asm/system.h>
 #include <asm/mach-types.h>
+
+void __iomem *(*imx_ioremap)(unsigned long, size_t, unsigned int) = NULL;
+EXPORT_SYMBOL_GPL(imx_ioremap);
 
 static void __iomem *wdog_base;
 
@@ -67,7 +71,7 @@ void arch_reset(char mode, const char *cmd)
 	mdelay(50);
 
 	/* we'll take a jump through zero as a poor second */
-	cpu_reset(0);
+	soft_restart(0);
 }
 
 void mxc_arch_reset_init(void __iomem *base)

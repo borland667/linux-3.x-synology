@@ -189,6 +189,8 @@ static struct clk_lookup periph_clocks_lookups[] = {
 	CLKDEV_CON_DEV_ID("spi_clk", "atmel_spi.0", &spi0_clk),
 	CLKDEV_CON_DEV_ID("spi_clk", "atmel_spi.1", &spi1_clk),
 	CLKDEV_CON_DEV_ID("t0_clk", "atmel_tcb.0", &tcb_clk),
+	/* fake hclk clock */
+	CLKDEV_CON_DEV_ID("hclk", "at91_ohci", &ohci_clk),
 };
 
 static struct clk_lookup usart_clocks_lookups[] = {
@@ -303,7 +305,7 @@ static void __init at91sam9263_map_io(void)
 
 static void __init at91sam9263_initialize(void)
 {
-	at91_arch_reset = at91sam9_alt_reset;
+	arm_pm_restart = at91sam9_alt_restart;
 	pm_power_off = at91sam9263_poweroff;
 	at91_extern_irq = (1 << AT91SAM9263_ID_IRQ0) | (1 << AT91SAM9263_ID_IRQ1);
 

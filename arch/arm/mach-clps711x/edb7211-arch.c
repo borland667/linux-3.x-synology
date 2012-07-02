@@ -37,8 +37,7 @@ static void __init edb7211_reserve(void)
 }
 
 static void __init
-fixup_edb7211(struct machine_desc *desc, struct tag *tags,
-	      char **cmdline, struct meminfo *mi)
+fixup_edb7211(struct tag *tags, char **cmdline, struct meminfo *mi)
 {
 	/*
 	 * Bank start addresses are not present in the information
@@ -63,4 +62,5 @@ MACHINE_START(EDB7211, "CL-EDB7211 (EP7211 eval board)")
 	.reserve	= edb7211_reserve,
 	.init_irq	= clps711x_init_irq,
 	.timer		= &clps711x_timer,
+	.restart	= clps711x_restart,
 MACHINE_END

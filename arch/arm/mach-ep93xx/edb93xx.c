@@ -37,6 +37,7 @@
 #include <mach/hardware.h>
 #include <mach/fb.h>
 #include <mach/ep93xx_spi.h>
+#include <mach/gpio-ep93xx.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -159,6 +160,11 @@ static void __init edb93xx_register_spi(void)
 /*************************************************************************
  * EDB93xx I2S
  *************************************************************************/
+static struct platform_device edb93xx_audio_device = {
+	.name		= "edb93xx-audio",
+	.id		= -1,
+};
+
 static int __init edb93xx_has_audio(void)
 {
 	return (machine_is_edb9301() || machine_is_edb9302() ||
@@ -170,6 +176,7 @@ static void __init edb93xx_register_i2s(void)
 {
 	if (edb93xx_has_audio()) {
 		ep93xx_register_i2s();
+		platform_device_register(&edb93xx_audio_device);
 	}
 }
 
@@ -245,6 +252,7 @@ MACHINE_START(EDB9301, "Cirrus Logic EDB9301 Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -256,6 +264,7 @@ MACHINE_START(EDB9302, "Cirrus Logic EDB9302 Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -267,6 +276,7 @@ MACHINE_START(EDB9302A, "Cirrus Logic EDB9302A Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -278,6 +288,7 @@ MACHINE_START(EDB9307, "Cirrus Logic EDB9307 Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -289,6 +300,7 @@ MACHINE_START(EDB9307A, "Cirrus Logic EDB9307A Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -300,6 +312,7 @@ MACHINE_START(EDB9312, "Cirrus Logic EDB9312 Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -311,6 +324,7 @@ MACHINE_START(EDB9315, "Cirrus Logic EDB9315 Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif
 
@@ -322,5 +336,6 @@ MACHINE_START(EDB9315A, "Cirrus Logic EDB9315A Evaluation Board")
 	.init_irq	= ep93xx_init_irq,
 	.timer		= &ep93xx_timer,
 	.init_machine	= edb93xx_init_machine,
+	.restart	= ep93xx_restart,
 MACHINE_END
 #endif

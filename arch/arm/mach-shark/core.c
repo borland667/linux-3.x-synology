@@ -29,7 +29,6 @@
 void arch_reset(char mode, const char *cmd)
 {
         short temp;
-        local_irq_disable();
         /* Reset the Machine via pc[3] of the sequoia chipset */
         outw(0x09,0x24);
         temp=inw(0x26);
@@ -152,7 +151,7 @@ static struct sys_timer shark_timer = {
 
 MACHINE_START(SHARK, "Shark")
 	/* Maintainer: Alexander Schulz */
-	.boot_params	= 0x08003000,
+	.atag_offset	= 0x3000,
 	.map_io		= shark_map_io,
 	.init_irq	= shark_init_irq,
 	.timer		= &shark_timer,

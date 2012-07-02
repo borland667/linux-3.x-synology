@@ -193,6 +193,8 @@ static struct clk_lookup periph_clocks_lookups[] = {
 	CLKDEV_CON_DEV_ID("pclk", "ssc.0", &ssc0_clk),
 	CLKDEV_CON_DEV_ID("pclk", "ssc.1", &ssc1_clk),
 	CLKDEV_CON_DEV_ID("pclk", "ssc.2", &ssc2_clk),
+	/* fake hclk clock */
+	CLKDEV_CON_DEV_ID("hclk", "at91_ohci", &ohci_clk),
 };
 
 static struct clk_lookup usart_clocks_lookups[] = {
@@ -286,7 +288,7 @@ static struct at91_gpio_bank at91rm9200_gpio[] = {
 	}
 };
 
-static void at91rm9200_reset(void)
+static void at91rm9200_restart(char mode, const char *cmd)
 {
 	/*
 	 * Perform a hardware reset with the use of the Watchdog timer.
@@ -307,7 +309,7 @@ static void __init at91rm9200_map_io(void)
 
 static void __init at91rm9200_initialize(void)
 {
-	at91_arch_reset = at91rm9200_reset;
+	arm_pm_restart = at91rm9200_restart;
 	at91_extern_irq = (1 << AT91RM9200_ID_IRQ0) | (1 << AT91RM9200_ID_IRQ1)
 			| (1 << AT91RM9200_ID_IRQ2) | (1 << AT91RM9200_ID_IRQ3)
 			| (1 << AT91RM9200_ID_IRQ4) | (1 << AT91RM9200_ID_IRQ5)

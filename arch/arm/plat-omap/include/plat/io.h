@@ -228,13 +228,13 @@
 
 #define OMAP44XX_EMIF2_PHYS	OMAP44XX_EMIF2_BASE
 						/* 0x4d000000 --> 0xfd200000 */
-#define OMAP44XX_EMIF2_VIRT	(OMAP44XX_EMIF2_PHYS + OMAP4_L3_PER_IO_OFFSET)
 #define OMAP44XX_EMIF2_SIZE	SZ_1M
+#define OMAP44XX_EMIF2_VIRT	(OMAP44XX_EMIF1_VIRT + OMAP44XX_EMIF1_SIZE)
 
 #define OMAP44XX_DMM_PHYS	OMAP44XX_DMM_BASE
 						/* 0x4e000000 --> 0xfd300000 */
-#define OMAP44XX_DMM_VIRT	(OMAP44XX_DMM_PHYS + OMAP4_L3_PER_IO_OFFSET)
 #define OMAP44XX_DMM_SIZE	SZ_1M
+#define OMAP44XX_DMM_VIRT	(OMAP44XX_EMIF2_VIRT + OMAP44XX_EMIF2_SIZE)
 /*
  * ----------------------------------------------------------------------------
  * Omap specific register access
@@ -247,6 +247,8 @@
  * NOTE: Please use ioremap + __raw_read/write where possible instead of these
  */
 
+void omap_ioremap_init(void);
+
 extern u8 omap_readb(u32 pa);
 extern u16 omap_readw(u32 pa);
 extern u32 omap_readl(u32 pa);
@@ -255,52 +257,7 @@ extern void omap_writew(u16 v, u32 pa);
 extern void omap_writel(u32 v, u32 pa);
 
 struct omap_sdrc_params;
-
-extern void omap1_map_common_io(void);
-extern void omap1_init_common_hw(void);
-
-#ifdef CONFIG_SOC_OMAP2420
-extern void omap242x_map_common_io(void);
-#else
-static inline void omap242x_map_common_io(void)
-{
-}
-#endif
-
-#ifdef CONFIG_SOC_OMAP2430
-extern void omap243x_map_common_io(void);
-#else
-static inline void omap243x_map_common_io(void)
-{
-}
-#endif
-
-#ifdef CONFIG_ARCH_OMAP3
-extern void omap34xx_map_common_io(void);
-#else
-static inline void omap34xx_map_common_io(void)
-{
-}
-#endif
-
-#ifdef CONFIG_SOC_OMAPTI816X
-extern void omapti816x_map_common_io(void);
-#else
-static inline void omapti816x_map_common_io(void)
-{
-}
-#endif
-
-#ifdef CONFIG_ARCH_OMAP4
-extern void omap44xx_map_common_io(void);
-#else
-static inline void omap44xx_map_common_io(void)
-{
-}
-#endif
-
-extern void omap2_init_common_infrastructure(void);
-extern void omap2_init_common_devices(struct omap_sdrc_params *sdrc_cs0,
+extern void omap_sdrc_init(struct omap_sdrc_params *sdrc_cs0,
 				      struct omap_sdrc_params *sdrc_cs1);
 
 #define __arch_ioremap	omap_ioremap
@@ -308,6 +265,8 @@ extern void omap2_init_common_devices(struct omap_sdrc_params *sdrc_cs0,
 
 void __iomem *omap_ioremap(unsigned long phys, size_t size, unsigned int type);
 void omap_iounmap(volatile void __iomem *addr);
+
+extern void __init omap_init_consistent_dma_size(void);
 
 #endif
 

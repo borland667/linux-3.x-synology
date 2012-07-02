@@ -834,7 +834,7 @@ static int iscsit_attach_ooo_cmdsn(
 			 */
 			list_for_each_entry(ooo_tmp, &sess->sess_ooo_cmdsn_list,
 						ooo_list) {
-				while (ooo_tmp->cmdsn < ooo_cmdsn->cmdsn)
+				if (ooo_tmp->cmdsn < ooo_cmdsn->cmdsn)
 					continue;
 
 				list_add(&ooo_cmdsn->ooo_list,
@@ -938,8 +938,7 @@ int iscsit_execute_cmd(struct iscsi_cmd *cmd, int ooo)
 		 * handle the SCF_SCSI_RESERVATION_CONFLICT case here as well.
 		 */
 		if (se_cmd->se_cmd_flags & SCF_SCSI_CDB_EXCEPTION) {
-			if (se_cmd->se_cmd_flags &
-					SCF_SCSI_RESERVATION_CONFLICT) {
+			if (se_cmd->scsi_sense_reason == TCM_RESERVATION_CONFLICT) {
 				cmd->i_state = ISTATE_SEND_STATUS;
 				spin_unlock_bh(&cmd->istate_lock);
 				iscsit_add_cmd_to_response_queue(cmd, cmd->conn,

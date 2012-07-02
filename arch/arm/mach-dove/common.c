@@ -158,7 +158,7 @@ void __init dove_spi0_init(void)
 
 void __init dove_spi1_init(void)
 {
-	orion_spi_init(DOVE_SPI1_PHYS_BASE, get_tclk());
+	orion_spi_1_init(DOVE_SPI1_PHYS_BASE, get_tclk());
 }
 
 /*****************************************************************************
@@ -291,4 +291,20 @@ void __init dove_init(void)
 	dove_rtc_init();
 	dove_xor0_init();
 	dove_xor1_init();
+}
+
+void dove_restart(char mode, const char *cmd)
+{
+	/*
+	 * Enable soft reset to assert RSTOUTn.
+	 */
+	writel(SOFT_RESET_OUT_EN, RSTOUTn_MASK);
+
+	/*
+	 * Assert soft reset.
+	 */
+	writel(SOFT_RESET, SYSTEM_SOFT_RESET);
+
+	while (1)
+		;
 }

@@ -224,7 +224,7 @@ static int iscsi_login_zero_tsih_s1(
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
 		pr_err("Could not allocate memory for session\n");
-		return -1;
+		return -ENOMEM;
 	}
 
 	iscsi_login_set_conn_values(sess, conn, pdu->cid);
@@ -250,7 +250,8 @@ static int iscsi_login_zero_tsih_s1(
 		pr_err("idr_pre_get() for sess_idr failed\n");
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
-		return -1;
+		kfree(sess);
+		return -ENOMEM;
 	}
 	spin_lock(&sess_idr_lock);
 	idr_get_new(&sess_idr, NULL, &sess->session_index);
@@ -270,14 +271,16 @@ static int iscsi_login_zero_tsih_s1(
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
 		pr_err("Unable to allocate memory for"
 				" struct iscsi_sess_ops.\n");
-		return -1;
+		kfree(sess);
+		return -ENOMEM;
 	}
 
 	sess->se_sess = transport_init_session();
-	if (!sess->se_sess) {
+	if (IS_ERR(sess->se_sess)) {
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
-		return -1;
+		kfree(sess);
+		return -ENOMEM;
 	}
 
 	return 0;
@@ -1013,19 +1016,9 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 					ISCSI_LOGIN_STATUS_TARGET_ERROR);
 			goto new_sess_out;
 		}
-#if 0
-		if (!iscsi_ntop6((const unsigned char *)
-				&sock_in6.sin6_addr.in6_u,
-				(char *)&conn->ipv6_login_ip[0],
-				IPV6_ADDRESS_SPACE)) {
-			pr_err("iscsi_ntop6() failed\n");
-			iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
-					ISCSI_LOGIN_STATUS_TARGET_ERROR);
-			goto new_sess_out;
-		}
-#else
-		pr_debug("Skipping iscsi_ntop6()\n");
-#endif
+		snprintf(conn->login_ip, sizeof(conn->login_ip), "%pI6c",
+				&sock_in6.sin6_addr.in6_u);
+		conn->login_port = ntohs(sock_in6.sin6_port);
 	} else {
 		memset(&sock_in, 0, sizeof(struct sockaddr_in));
 

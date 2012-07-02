@@ -17,7 +17,7 @@
  * Maintainers: http://www.nslu2-linux.org/
  *
  */
-
+#include <linux/gpio.h>
 #include <linux/if_ether.h>
 #include <linux/irq.h>
 #include <linux/jiffies.h>
@@ -32,7 +32,6 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/flash.h>
-#include <asm/gpio.h>
 
 #define NAS100D_SDA_PIN		5
 #define NAS100D_SCL_PIN		6
@@ -322,4 +321,5 @@ MACHINE_START(NAS100D, "Iomega NAS 100d")
 #if defined(CONFIG_PCI)
 	.dma_zone_size	= SZ_64M,
 #endif
+	.restart	= ixp4xx_restart,
 MACHINE_END

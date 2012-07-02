@@ -21,8 +21,8 @@
 #include <linux/device.h>
 #include <linux/amba/bus.h>
 #include <linux/platform_device.h>
-#include <linux/gpio.h>
 
+#include <plat/gpio-nomadik.h>
 #include <mach/hardware.h>
 #include <mach/irqs.h>
 #include <asm/mach/map.h>
@@ -32,6 +32,7 @@
 #include <asm/hardware/cache-l2x0.h>
 
 #include "clock.h"
+#include "cpu-8815.h"
 
 #define __MEM_4K_RESOURCE(x) \
 	.res = {.start = (x), .end = (x) + SZ_4K - 1, .flags = IORESOURCE_MEM}

@@ -22,7 +22,6 @@
 
 #include <mach/map.h>
 #include <mach/regs-gpio.h>
-#include <mach/s3c6410.h>
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
@@ -30,6 +29,7 @@
 #include <plat/gpio-cfg.h>
 #include <plat/regs-fb-v4.h>
 
+#include "common.h"
 #include "mach-smartq.h"
 
 static struct gpio_led smartq7_leds[] = {
@@ -162,7 +162,7 @@ static void __init smartq7_machine_init(void)
 
 MACHINE_START(SMARTQ7, "SmartQ 7")
 	/* Maintainer: Maurus Cuelenaere <mcuelenaere AT gmail DOT com> */
-	.boot_params	= S3C64XX_PA_SDRAM + 0x100,
+	.atag_offset	= 0x100,
 	.init_irq	= s3c6410_init_irq,
 	.map_io		= smartq_map_io,
 	.init_machine	= smartq7_machine_init,
