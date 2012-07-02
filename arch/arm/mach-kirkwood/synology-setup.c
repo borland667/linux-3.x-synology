@@ -769,7 +769,7 @@ static void __init synology_init(void){
 
 #ifdef CONFIG_MACH_SYNOLOGY
 MACHINE_START(SYNOLOGY, "Synology DiskStation / RackStation")
-	.boot_params	= 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= synology_init,
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
@@ -780,7 +780,7 @@ MACHINE_END
 
 #ifdef CONFIG_MACH_SYNOLOGY_6282
 MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
-	.boot_params	= 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= synology_init,
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
