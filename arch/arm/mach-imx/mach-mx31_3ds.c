@@ -13,6 +13,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/clk.h>
@@ -53,11 +54,8 @@ static int mx31_3ds_pins[] = {
 	MX31_PIN_RXD1__RXD1,
 	IOMUX_MODE(MX31_PIN_GPIO1_1, IOMUX_CONFIG_GPIO),
 	/*SPI0*/
-	MX31_PIN_CSPI1_SCLK__SCLK,
-	MX31_PIN_CSPI1_MOSI__MOSI,
-	MX31_PIN_CSPI1_MISO__MISO,
-	MX31_PIN_CSPI1_SPI_RDY__SPI_RDY,
-	MX31_PIN_CSPI1_SS2__SS2, /* CS for LCD */
+	IOMUX_MODE(MX31_PIN_DSR_DCE1, IOMUX_CONFIG_ALT1),
+	IOMUX_MODE(MX31_PIN_RI_DCE1, IOMUX_CONFIG_ALT1),
 	/* SPI 1 */
 	MX31_PIN_CSPI2_SCLK__SCLK,
 	MX31_PIN_CSPI2_MOSI__MOSI,
@@ -689,6 +687,11 @@ static void __init mx31_3ds_init(void)
 {
 	int ret;
 
+	imx31_soc_init();
+
+	/* Configure SPI1 IOMUX */
+	mxc_iomux_set_gpr(MUX_PGP_CSPI_BB, true);
+
 	mxc_iomux_setup_multiple_pins(mx31_3ds_pins, ARRAY_SIZE(mx31_3ds_pins),
 				      "mx31_3ds");
 
@@ -761,7 +764,7 @@ static void __init mx31_3ds_reserve(void)
 
 MACHINE_START(MX31_3DS, "Freescale MX31PDK (3DS)")
 	/* Maintainer: Freescale Semiconductor, Inc. */
-	.boot_params = MX3x_PHYS_OFFSET + 0x100,
+	.atag_offset = 0x100,
 	.map_io = mx31_map_io,
 	.init_early = imx31_init_early,
 	.init_irq = mx31_init_irq,

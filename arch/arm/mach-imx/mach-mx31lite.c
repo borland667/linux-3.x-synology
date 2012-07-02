@@ -230,6 +230,8 @@ static void __init mx31lite_init(void)
 {
 	int ret;
 
+	imx31_soc_init();
+
 	switch (mx31lite_baseboard) {
 	case MX31LITE_NOBOARD:
 		break;
@@ -278,7 +280,7 @@ struct sys_timer mx31lite_timer = {
 
 MACHINE_START(MX31LITE, "LogicPD i.MX31 SOM")
 	/* Maintainer: Freescale Semiconductor, Inc. */
-	.boot_params = MX3x_PHYS_OFFSET + 0x100,
+	.atag_offset = 0x100,
 	.map_io = mx31lite_map_io,
 	.init_early = imx31_init_early,
 	.init_irq = mx31_init_irq,
