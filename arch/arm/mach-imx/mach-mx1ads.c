@@ -115,6 +115,8 @@ static struct i2c_board_info mx1ads_i2c_devices[] = {
  */
 static void __init mx1ads_init(void)
 {
+	imx1_soc_init();
+
 	mxc_gpio_setup_multiple_pins(mx1ads_pins,
 		ARRAY_SIZE(mx1ads_pins), "mx1ads");
 
@@ -143,7 +145,7 @@ struct sys_timer mx1ads_timer = {
 
 MACHINE_START(MX1ADS, "Freescale MX1ADS")
 	/* Maintainer: Sascha Hauer, Pengutronix */
-	.boot_params = MX1_PHYS_OFFSET + 0x100,
+	.atag_offset = 0x100,
 	.map_io = mx1_map_io,
 	.init_early = imx1_init_early,
 	.init_irq = mx1_init_irq,
@@ -152,7 +154,7 @@ MACHINE_START(MX1ADS, "Freescale MX1ADS")
 MACHINE_END
 
 MACHINE_START(MXLADS, "Freescale MXLADS")
-	.boot_params = MX1_PHYS_OFFSET + 0x100,
+	.atag_offset = 0x100,
 	.map_io = mx1_map_io,
 	.init_early = imx1_init_early,
 	.init_irq = mx1_init_irq,

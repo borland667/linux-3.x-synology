@@ -295,6 +295,8 @@ static const struct mxc_usbh_platform_data usbh2_pdata __initconst = {
 
 static void __init pcm038_init(void)
 {
+	imx27_soc_init();
+
 	mxc_gpio_setup_multiple_pins(pcm038_pins, ARRAY_SIZE(pcm038_pins),
 			"PCM038");
 
@@ -347,7 +349,7 @@ static struct sys_timer pcm038_timer = {
 };
 
 MACHINE_START(PCM038, "phyCORE-i.MX27")
-	.boot_params = MX27_PHYS_OFFSET + 0x100,
+	.atag_offset = 0x100,
 	.map_io = mx27_map_io,
 	.init_early = imx27_init_early,
 	.init_irq = mx27_init_irq,
