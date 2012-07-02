@@ -37,6 +37,7 @@
 #include <mach/hardware.h>
 #include <mach/fb.h>
 #include <mach/ep93xx_spi.h>
+#include <mach/gpio-ep93xx.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -159,6 +160,11 @@ static void __init edb93xx_register_spi(void)
 /*************************************************************************
  * EDB93xx I2S
  *************************************************************************/
+static struct platform_device edb93xx_audio_device = {
+	.name		= "edb93xx-audio",
+	.id		= -1,
+};
+
 static int __init edb93xx_has_audio(void)
 {
 	return (machine_is_edb9301() || machine_is_edb9302() ||
@@ -170,6 +176,7 @@ static void __init edb93xx_register_i2s(void)
 {
 	if (edb93xx_has_audio()) {
 		ep93xx_register_i2s();
+		platform_device_register(&edb93xx_audio_device);
 	}
 }
 

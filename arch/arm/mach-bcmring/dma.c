@@ -26,6 +26,7 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+#include <linux/sched.h>
 #include <linux/irqreturn.h>
 #include <linux/proc_fs.h>
 #include <linux/slab.h>
@@ -1613,7 +1614,7 @@ DMA_MemType_t dma_mem_type(void *addr)
 {
 	unsigned long addrVal = (unsigned long)addr;
 
-	if (addrVal >= VMALLOC_END) {
+	if (addrVal >= CONSISTENT_BASE) {
 		/* NOTE: DMA virtual memory space starts at 0xFFxxxxxx */
 
 		/* dma_alloc_xxx pages are physically and virtually contiguous */
