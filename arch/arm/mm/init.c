@@ -20,7 +20,6 @@
 #include <linux/highmem.h>
 #include <linux/gfp.h>
 #include <linux/memblock.h>
-#include <linux/byteorder/generic.h>
 #include <linux/dma-contiguous.h>
 
 #include <asm/mach-types.h>
@@ -49,61 +48,12 @@ static int __init early_initrd(char *p)
 	if (*endp == ',') {
 		size = memparse(endp + 1, NULL);
 
-		if (phys_initrd_size == 0){
-			phys_initrd_start = start;
-			phys_initrd_size = size;
-		}
+		phys_initrd_start = start;
+		phys_initrd_size = size;
 	}
 	return 0;
 }
 early_param("initrd", early_initrd);
-
-/* 
- * Some custom versions of u-boot put the source address of the 
- * initrd, rather than the load address (which they still copy to)
- * into the ATAG_INITRD2 tag.
- */
-static void __init fixup_uboot_initrd_start_addr(void){
-	void __iomem *src;
-	unsigned long loadaddr;
-	void __iomem *dst;
-
-	if ((phys_initrd_start & ~PAGE_MASK) != 0x40)
-		return;
-
-	src = __arm_ioremap(phys_initrd_start - 0x40, phys_initrd_size + 0x40, MT_MEMORY_NONCACHED);
-	if (src == NULL){
-		phys_initrd_start = phys_initrd_size = 0;
-		return;
-	}
-	
-	if (ntohl(*((unsigned long *)src)) != 0x27051956)
-		/* No u-boot magic */
-		goto fail;
-	
-	if (ntohl(*((unsigned long *)(src + 8))) != phys_initrd_size)
-		/* Wrong size */
-		goto fail;
-	
-	loadaddr = ntohl(*((unsigned long *)(src + 12)));
-
-	if (loadaddr == phys_initrd_start)
-		/* This means that the u-boot did the right thing. */
-		goto fail;
-
-	dst = __arm_ioremap(loadaddr - 0x40, phys_initrd_size + 0x40, MT_MEMORY_NONCACHED);
-	if (dst == NULL)
-		goto fail;
-	
-	if (!memcmp(src, dst, phys_initrd_size + 0x40))
-		phys_initrd_start = loadaddr;
-	else
-		phys_initrd_start = phys_initrd_size = 0;
-	
-	__iounmap(dst);
-fail:
-	__iounmap(src);
-}
 
 static int __init parse_tag_initrd(const struct tag *tag)
 {
@@ -120,7 +70,6 @@ static int __init parse_tag_initrd2(const struct tag *tag)
 {
 	phys_initrd_start = tag->u.initrd.start;
 	phys_initrd_size = tag->u.initrd.size;
-	fixup_uboot_initrd_start_addr();
 	return 0;
 }
 
