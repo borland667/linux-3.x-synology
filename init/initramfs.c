@@ -467,6 +467,9 @@ static char * __init unpack_to_rootfs(char *buf, unsigned len)
 					 compress_name);
 				message = msg_buf;
 			}
+		} else if (state == Reset && saved_offset != 0) {
+			my_inptr = len;
+			pr_warn("%s: junk at end of compressed archive\n", __func__);
 		} else
 			error("junk in compressed archive");
 		if (state != Reset)
