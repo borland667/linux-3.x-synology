@@ -898,7 +898,7 @@ MACHINE_START(SYNOLOGY, "Synology DiskStation / RackStation")
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
-	.timer		= &kirkwood_timer,
+	.init_time	= &kirkwood_timer_init,
 	.restart	= synology_restart,
 MACHINE_END
 #endif
@@ -910,7 +910,7 @@ MACHINE_START(SYNOLOGY_6282, "Synology DiskStation / RackStation")
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
-	.timer		= &kirkwood_timer,
+	.init_time	= kirkwood_timer_init,
 	.restart	= synology_restart,
 MACHINE_END
 #endif
