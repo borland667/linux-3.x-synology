@@ -70,7 +70,7 @@ int wl1271_acx_sleep_auth(struct wl1271 *wl, u8 sleep_auth)
 	struct acx_sleep_auth *auth;
 	int ret;
 
-	wl1271_debug(DEBUG_ACX, "acx sleep auth");
+	wl1271_debug(DEBUG_ACX, "acx sleep auth %d", sleep_auth);
 
 	auth = kzalloc(sizeof(*auth), GFP_KERNEL);
 	if (!auth) {
@@ -81,11 +81,18 @@ int wl1271_acx_sleep_auth(struct wl1271 *wl, u8 sleep_auth)
 	auth->sleep_auth = sleep_auth;
 
 	ret = wl1271_cmd_configure(wl, ACX_SLEEP_AUTH, auth, sizeof(*auth));
+	if (ret < 0) {
+		wl1271_error("could not configure sleep_auth to %d: %d",
+			     sleep_auth, ret);
+		goto out;
+	}
 
+	wl->sleep_auth = sleep_auth;
 out:
 	kfree(auth);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(wl1271_acx_sleep_auth);
 
 int wl1271_acx_tx_power(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			int power)
@@ -155,7 +162,8 @@ int wl1271_acx_mem_map(struct wl1271 *wl, struct acx_header *mem_map,
 
 	wl1271_debug(DEBUG_ACX, "acx mem map");
 
-	ret = wl1271_cmd_interrogate(wl, ACX_MEM_MAP, mem_map, len);
+	ret = wl1271_cmd_interrogate(wl, ACX_MEM_MAP, mem_map,
+				     sizeof(struct acx_header), len);
 	if (ret < 0)
 		return ret;
 
@@ -708,14 +716,15 @@ out:
 	return ret;
 }
 
-int wl1271_acx_statistics(struct wl1271 *wl, struct acx_statistics *stats)
+int wl1271_acx_statistics(struct wl1271 *wl, void *stats)
 {
 	int ret;
 
 	wl1271_debug(DEBUG_ACX, "acx statistics");
 
 	ret = wl1271_cmd_interrogate(wl, ACX_STATISTICS, stats,
-				     sizeof(*stats));
+				     sizeof(struct acx_header),
+				     wl->stats.fw_stats_len);
 	if (ret < 0) {
 		wl1271_warning("acx statistics failed: %d", ret);
 		return -ENOMEM;
@@ -997,6 +1006,7 @@ out:
 	kfree(mem_conf);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(wl12xx_acx_mem_cfg);
 
 int wl1271_acx_init_mem_config(struct wl1271 *wl)
 {
@@ -1027,6 +1037,7 @@ int wl1271_acx_init_mem_config(struct wl1271 *wl)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(wl1271_acx_init_mem_config);
 
 int wl1271_acx_init_rx_interrupt(struct wl1271 *wl)
 {
@@ -1150,6 +1161,7 @@ out:
 	kfree(acx);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(wl1271_acx_pm_config);
 
 int wl1271_acx_keep_alive_mode(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			       bool enable)
@@ -1330,6 +1342,8 @@ out:
 	kfree(acx);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(wl1271_acx_set_ht_capabilities);
+
 
 int wl1271_acx_set_ht_information(struct wl1271 *wl,
 				   struct wl12xx_vif *wlvif,
@@ -1423,13 +1437,22 @@ int wl12xx_acx_set_ba_receiver_session(struct wl1271 *wl, u8 tid_index,
 	acx->win_size = wl->conf.ht.rx_ba_win_size;
 	acx->ssn = ssn;
 
-	ret = wl1271_cmd_configure(wl, ACX_BA_SESSION_RX_SETUP, acx,
-				   sizeof(*acx));
+	ret = wlcore_cmd_configure_failsafe(wl, ACX_BA_SESSION_RX_SETUP, acx,
+					    sizeof(*acx),
+					    BIT(CMD_STATUS_NO_RX_BA_SESSION));
 	if (ret < 0) {
 		wl1271_warning("acx ba receiver session failed: %d", ret);
 		goto out;
 	}
 
+	/* sometimes we can't start the session */
+	if (ret == CMD_STATUS_NO_RX_BA_SESSION) {
+		wl1271_warning("no fw rx ba on tid %d", tid_index);
+		ret = -EBUSY;
+		goto out;
+	}
+
+	ret = 0;
 out:
 	kfree(acx);
 	return ret;
@@ -1449,8 +1472,8 @@ int wl12xx_acx_tsf_info(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 
 	tsf_info->role_id = wlvif->role_id;
 
-	ret = wl1271_cmd_interrogate(wl, ACX_TSF_INFO,
-				     tsf_info, sizeof(*tsf_info));
+	ret = wl1271_cmd_interrogate(wl, ACX_TSF_INFO, tsf_info,
+				sizeof(struct acx_header), sizeof(*tsf_info));
 	if (ret < 0) {
 		wl1271_warning("acx tsf info interrogate failed");
 		goto out;
@@ -1713,6 +1736,35 @@ out:
 	kfree(acx);
 	return ret;
 
+}
+
+int wlcore_acx_average_rssi(struct wl1271 *wl, struct wl12xx_vif *wlvif,
+			    s8 *avg_rssi)
+{
+	struct acx_roaming_stats *acx;
+	int ret = 0;
+
+	wl1271_debug(DEBUG_ACX, "acx roaming statistics");
+
+	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
+	if (!acx) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	acx->role_id = wlvif->role_id;
+	ret = wl1271_cmd_interrogate(wl, ACX_ROAMING_STATISTICS_TBL,
+				     acx, sizeof(*acx), sizeof(*acx));
+	if (ret	< 0) {
+		wl1271_warning("acx roaming statistics failed: %d", ret);
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	*avg_rssi = acx->rssi_beacon;
+out:
+	kfree(acx);
+	return ret;
 }
 
 #ifdef CONFIG_PM

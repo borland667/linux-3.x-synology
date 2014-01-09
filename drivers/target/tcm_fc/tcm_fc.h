@@ -22,6 +22,7 @@
 #define FT_NAMELEN 32		/* length of ASCII WWPNs including pad */
 #define FT_TPG_NAMELEN 32	/* max length of TPG name */
 #define FT_LUN_NAMELEN 32	/* max length of LUN name */
+#define TCM_FC_DEFAULT_TAGS 512	/* tags used for per-session preallocation */
 
 struct ft_transport_id {
 	__u8	format;
@@ -131,6 +132,7 @@ extern struct list_head ft_lport_list;
 extern struct mutex ft_lport_lock;
 extern struct fc4_prov ft_prov;
 extern struct target_fabric_configfs *ft_configfs;
+extern unsigned int ft_debug_logging;
 
 /*
  * Fabric methods.
@@ -160,7 +162,7 @@ int ft_write_pending(struct se_cmd *);
 int ft_write_pending_status(struct se_cmd *);
 u32 ft_get_task_tag(struct se_cmd *);
 int ft_get_cmd_state(struct se_cmd *);
-int ft_queue_tm_resp(struct se_cmd *);
+void ft_queue_tm_resp(struct se_cmd *);
 
 /*
  * other internal functions.

@@ -39,13 +39,8 @@ bindir_relative = bin
 bindir = $(prefix)/$(bindir_relative)
 man_dir = $(prefix)/share/man
 man_dir_SQ = '$(subst ','\'',$(man_dir))'
-html_install = $(prefix)/share/kernelshark/html
-html_install_SQ = '$(subst ','\'',$(html_install))'
-img_install = $(prefix)/share/kernelshark/html/images
-img_install_SQ = '$(subst ','\'',$(img_install))'
 
-export man_dir man_dir_SQ html_install html_install_SQ INSTALL
-export img_install img_install_SQ
+export man_dir man_dir_SQ INSTALL
 export DESTDIR DESTDIR_SQ
 
 # copy a bit from Linux kbuild
@@ -65,7 +60,7 @@ ifeq ($(BUILD_SRC),)
 ifneq ($(BUILD_OUTPUT),)
 
 define build_output
-	$(if $(VERBOSE:1=),@)$(MAKE) -C $(BUILD_OUTPUT) 	\
+	$(if $(VERBOSE:1=),@)+$(MAKE) -C $(BUILD_OUTPUT) 	\
 	BUILD_SRC=$(CURDIR) -f $(CURDIR)/Makefile $1
 endef
 
@@ -76,10 +71,7 @@ $(if $(BUILD_OUTPUT),, \
 
 all: sub-make
 
-gui: force
-	$(call build_output, all_cmd)
-
-$(filter-out gui,$(MAKECMDGOALS)): sub-make
+$(MAKECMDGOALS): sub-make
 
 sub-make: force
 	$(call build_output, $(MAKECMDGOALS))
@@ -122,14 +114,14 @@ export Q VERBOSE
 
 EVENT_PARSE_VERSION = $(EP_VERSION).$(EP_PATCHLEVEL).$(EP_EXTRAVERSION)
 
-INCLUDES = -I. -I/usr/local/include $(CONFIG_INCLUDES)
+INCLUDES = -I. $(CONFIG_INCLUDES)
 
 # Set compile option CFLAGS if not set elsewhere
 CFLAGS ?= -g -Wall
 
 # Append required CFLAGS
 override CFLAGS += $(CONFIG_FLAGS) $(INCLUDES) $(PLUGIN_DIR_SQ)
-override CFLAGS += $(udis86-flags)
+override CFLAGS += $(udis86-flags) -D_GNU_SOURCE
 
 ifeq ($(VERBOSE),1)
   Q =
@@ -142,14 +134,14 @@ ifeq ($(VERBOSE),1)
   print_install =
 else
   Q = @
-  print_compile =		echo '  CC                 '$(OBJ);
-  print_app_build =		echo '  BUILD              '$(OBJ);
-  print_fpic_compile =		echo '  CC FPIC            '$(OBJ);
-  print_shared_lib_compile =	echo '  BUILD SHARED LIB   '$(OBJ);
-  print_plugin_obj_compile =	echo '  CC PLUGIN OBJ      '$(OBJ);
-  print_plugin_build =		echo '  CC PLUGI           '$(OBJ);
-  print_static_lib_build =	echo '  BUILD STATIC LIB   '$(OBJ);
-  print_install =		echo '  INSTALL     '$1'	to	$(DESTDIR_SQ)$2';
+  print_compile =		echo '  CC       '$(OBJ);
+  print_app_build =		echo '  BUILD    '$(OBJ);
+  print_fpic_compile =		echo '  CC FPIC  '$(OBJ);
+  print_shared_lib_compile =	echo '  BUILD    SHARED LIB '$(OBJ);
+  print_plugin_obj_compile =	echo '  BUILD    PLUGIN OBJ '$(OBJ);
+  print_plugin_build =		echo '  BUILD    PLUGIN     '$(OBJ);
+  print_static_lib_build =	echo '  BUILD    STATIC LIB '$(OBJ);
+  print_install =		echo '  INSTALL  '$1'	to	$(DESTDIR_SQ)$2';
 endif
 
 do_fpic_compile =					\
@@ -189,6 +181,7 @@ $(obj)/%.o: $(src)/%.c
 	$(Q)$(call do_compile)
 
 PEVENT_LIB_OBJS = event-parse.o trace-seq.o parse-filter.o parse-utils.o
+PEVENT_LIB_OBJS += kbuffer-parse.o
 
 ALL_OBJS = $(PEVENT_LIB_OBJS)
 
@@ -207,7 +200,7 @@ libtraceevent.so: $(PEVENT_LIB_OBJS)
 libtraceevent.a: $(PEVENT_LIB_OBJS)
 	$(Q)$(do_build_static_lib)
 
-$(PEVENT_LIB_OBJS): %.o: $(src)/%.c
+$(PEVENT_LIB_OBJS): %.o: $(src)/%.c TRACEEVENT-CFLAGS
 	$(Q)$(do_fpic_compile)
 
 define make_version.h
@@ -250,12 +243,13 @@ endef
 all_objs := $(sort $(ALL_OBJS))
 all_deps := $(all_objs:%.o=.%.d)
 
+# let .d file also depends on the source and header files
 define check_deps
-		$(CC) -M $(CFLAGS) $< > $@;
+		@set -e; $(RM) $@; \
+		$(CC) -MM $(CFLAGS) $< > $@.$$$$; \
+		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+		$(RM) $@.$$$$
 endef
-
-$(gui_deps): ks_version.h
-$(non_gui_deps): tc_version.h
 
 $(all_deps): .%.d: $(src)/%.c
 	$(Q)$(call check_deps)
@@ -268,13 +262,25 @@ ifneq ($(dep_includes),)
  include $(dep_includes)
 endif
 
+### Detect environment changes
+TRACK_CFLAGS = $(subst ','\'',$(CFLAGS)):$(ARCH):$(CROSS_COMPILE)
+
+TRACEEVENT-CFLAGS: force
+	@FLAGS='$(TRACK_CFLAGS)'; \
+	    if test x"$$FLAGS" != x"`cat TRACEEVENT-CFLAGS 2>/dev/null`" ; then \
+		echo 1>&2 "  FLAGS:   * new build flags or cross compiler"; \
+		echo "$$FLAGS" >TRACEEVENT-CFLAGS; \
+            fi
+
 tags:	force
 	$(RM) tags
-	find . -name '*.[ch]' | xargs ctags --extra=+f --c-kinds=+px
+	find . -name '*.[ch]' | xargs ctags --extra=+f --c-kinds=+px \
+	--regex-c++='/_PE\(([^,)]*).*/PEVENT_ERRNO__\1/'
 
 TAGS:	force
 	$(RM) TAGS
-	find . -name '*.[ch]' | xargs etags
+	find . -name '*.[ch]' | xargs etags \
+	--regex='/_PE(\([^,)]*\).*/PEVENT_ERRNO__\1/'
 
 define do_install
 	$(print_install)				\
@@ -284,14 +290,14 @@ define do_install
 	$(INSTALL) $1 '$(DESTDIR_SQ)$2'
 endef
 
-install_lib: all_cmd install_plugins install_python
+install_lib: all_cmd
 	$(Q)$(call do_install,$(LIB_FILE),$(bindir_SQ))
 
 install: install_lib
 
 clean:
-	$(RM) *.o *~ $(TARGETS) *.a *.so $(VERSION_FILES).*.d
-	$(RM) tags TAGS
+	$(RM) *.o *~ $(TARGETS) *.a *.so $(VERSION_FILES) .*.d
+	$(RM) TRACEEVENT-CFLAGS tags TAGS
 
 endif # skip-makefile
 

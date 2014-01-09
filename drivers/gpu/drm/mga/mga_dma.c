@@ -35,10 +35,8 @@
  * \author Gareth Hughes <gareth@valinux.com>
  */
 
-#include "drmP.h"
-#include "drm.h"
-#include "drm_sarea.h"
-#include "mga_drm.h"
+#include <drm/drmP.h>
+#include <drm/mga_drm.h>
 #include "mga_drv.h"
 
 #define MGA_DEFAULT_USEC_TIMEOUT	10000
@@ -407,11 +405,6 @@ int mga_driver_load(struct drm_device *dev, unsigned long flags)
 
 	dev_priv->mmio_base = pci_resource_start(dev->pdev, 1);
 	dev_priv->mmio_size = pci_resource_len(dev->pdev, 1);
-
-	dev->counters += 3;
-	dev->types[6] = _DRM_STAT_IRQ;
-	dev->types[7] = _DRM_STAT_PRIMARY;
-	dev->types[8] = _DRM_STAT_SECONDARY;
 
 	ret = drm_vblank_init(dev, 1);
 

@@ -20,6 +20,8 @@
 #include <linux/freezer.h>
 #include <linux/suspend.h>
 #include <linux/fsl_devices.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/export.h>
 
@@ -326,7 +328,7 @@ static int pmc_probe(struct platform_device *ofdev)
 	const struct of_device_id *match;
 	struct device_node *np = ofdev->dev.of_node;
 	struct resource res;
-	struct pmc_type *type;
+	const struct pmc_type *type;
 	int ret = 0;
 
 	match = of_match_device(pmc_match, &ofdev->dev);

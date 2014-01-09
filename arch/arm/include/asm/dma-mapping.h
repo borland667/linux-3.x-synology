@@ -11,14 +11,26 @@
 #include <asm-generic/dma-coherent.h>
 #include <asm/memory.h>
 
+#include <xen/xen.h>
+#include <asm/xen/hypervisor.h>
+
 #define DMA_ERROR_CODE	(~0)
 extern struct dma_map_ops arm_dma_ops;
+extern struct dma_map_ops arm_coherent_dma_ops;
 
-static inline struct dma_map_ops *get_dma_ops(struct device *dev)
+static inline struct dma_map_ops *__generic_dma_ops(struct device *dev)
 {
 	if (dev && dev->archdata.dma_ops)
 		return dev->archdata.dma_ops;
 	return &arm_dma_ops;
+}
+
+static inline struct dma_map_ops *get_dma_ops(struct device *dev)
+{
+	if (xen_initial_domain())
+		return xen_dma_ops;
+	else
+		return __generic_dma_ops(dev);
 }
 
 static inline void set_dma_ops(struct device *dev, struct dma_map_ops *ops)
@@ -63,6 +75,7 @@ static inline dma_addr_t virt_to_dma(struct device *dev, void *addr)
 {
 	return (dma_addr_t)__virt_to_bus((unsigned long)(addr));
 }
+
 #else
 static inline dma_addr_t pfn_to_dma(struct device *dev, unsigned long pfn)
 {
@@ -85,11 +98,52 @@ static inline dma_addr_t virt_to_dma(struct device *dev, void *addr)
 }
 #endif
 
+/* The ARM override for dma_max_pfn() */
+static inline unsigned long dma_max_pfn(struct device *dev)
+{
+	return PHYS_PFN_OFFSET + dma_to_pfn(dev, *dev->dma_mask);
+}
+#define dma_max_pfn(dev) dma_max_pfn(dev)
+
+static inline dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr)
+{
+	unsigned int offset = paddr & ~PAGE_MASK;
+	return pfn_to_dma(dev, __phys_to_pfn(paddr)) + offset;
+}
+
+static inline phys_addr_t dma_to_phys(struct device *dev, dma_addr_t dev_addr)
+{
+	unsigned int offset = dev_addr & ~PAGE_MASK;
+	return __pfn_to_phys(dma_to_pfn(dev, dev_addr)) + offset;
+}
+
+static inline bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
+{
+	u64 limit, mask;
+
+	if (!dev->dma_mask)
+		return 0;
+
+	mask = *dev->dma_mask;
+
+	limit = (mask + 1) & ~mask;
+	if (limit && size > limit)
+		return 0;
+
+	if ((addr | (addr + size - 1)) & ~mask)
+		return 0;
+
+	return 1;
+}
+
+static inline void dma_mark_clean(void *addr, size_t size) { }
+
 /*
  * DMA errors are defined by all-bits-set in the DMA address.
  */
 static inline int dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
 {
+	debug_dma_mapping_error(dev, dma_addr);
 	return dma_addr == DMA_ERROR_CODE;
 }
 
@@ -109,6 +163,8 @@ static inline void dma_free_noncoherent(struct device *dev, size_t size,
 }
 
 extern int dma_supported(struct device *dev, u64 mask);
+
+extern int arm_dma_set_mask(struct device *dev, u64 dma_mask);
 
 /**
  * arm_dma_alloc - allocate consistent memory for DMA
@@ -186,17 +242,6 @@ extern int arm_dma_mmap(struct device *dev, struct vm_area_struct *vma,
 			void *cpu_addr, dma_addr_t dma_addr, size_t size,
 			struct dma_attrs *attrs);
 
-#define dma_mmap_coherent(d, v, c, h, s) dma_mmap_attrs(d, v, c, h, s, NULL)
-
-static inline int dma_mmap_attrs(struct device *dev, struct vm_area_struct *vma,
-				  void *cpu_addr, dma_addr_t dma_addr,
-				  size_t size, struct dma_attrs *attrs)
-{
-	struct dma_map_ops *ops = get_dma_ops(dev);
-	BUG_ON(!ops);
-	return ops->mmap(dev, vma, cpu_addr, dma_addr, size, attrs);
-}
-
 static inline void *dma_alloc_writecombine(struct device *dev, size_t size,
 				       dma_addr_t *dma_handle, gfp_t flag)
 {
@@ -213,20 +258,12 @@ static inline void dma_free_writecombine(struct device *dev, size_t size,
 	return dma_free_attrs(dev, size, cpu_addr, dma_handle, &attrs);
 }
 
-static inline int dma_mmap_writecombine(struct device *dev, struct vm_area_struct *vma,
-		      void *cpu_addr, dma_addr_t dma_addr, size_t size)
-{
-	DEFINE_DMA_ATTRS(attrs);
-	dma_set_attr(DMA_ATTR_WRITE_COMBINE, &attrs);
-	return dma_mmap_attrs(dev, vma, cpu_addr, dma_addr, size, &attrs);
-}
-
 /*
- * This can be called during boot to increase the size of the consistent
- * DMA region above it's default value of 2MB. It must be called before the
- * memory allocator is initialised, i.e. before any core_initcall.
+ * This can be called during early boot to increase the size of the atomic
+ * coherent DMA pool above the default value of 256KiB. It must be called
+ * before postcore_initcall.
  */
-extern void __init init_consistent_dma_size(unsigned long size);
+extern void __init init_dma_coherent_pool_size(unsigned long size);
 
 /*
  * For SA-1111, IXP425, and ADI systems  the dma-mapping functions are "magic"
@@ -280,6 +317,9 @@ extern void arm_dma_sync_sg_for_cpu(struct device *, struct scatterlist *, int,
 		enum dma_data_direction);
 extern void arm_dma_sync_sg_for_device(struct device *, struct scatterlist *, int,
 		enum dma_data_direction);
+extern int arm_dma_get_sgtable(struct device *dev, struct sg_table *sgt,
+		void *cpu_addr, dma_addr_t dma_addr, size_t size,
+		struct dma_attrs *attrs);
 
 #endif /* __KERNEL__ */
 #endif

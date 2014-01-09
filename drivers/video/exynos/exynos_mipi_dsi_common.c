@@ -25,12 +25,11 @@
 #include <linux/io.h>
 #include <linux/memory.h>
 #include <linux/delay.h>
+#include <linux/irqreturn.h>
 #include <linux/kthread.h>
 
 #include <video/mipi_display.h>
 #include <video/exynos_mipi_dsim.h>
-
-#include <mach/map.h>
 
 #include "exynos_mipi_dsi_regs.h"
 #include "exynos_mipi_dsi_lowlevel.h"
@@ -78,11 +77,6 @@ irqreturn_t exynos_mipi_dsi_interrupt_handler(int irq, void *dev_id)
 {
 	struct mipi_dsim_device *dsim = dev_id;
 	unsigned int intsrc, intmsk;
-
-	if (dsim == NULL) {
-		dev_err(dsim->dev, "%s: wrong parameter\n", __func__);
-		return IRQ_NONE;
-	}
 
 	intsrc = exynos_mipi_dsi_read_interrupt(dsim);
 	intmsk = exynos_mipi_dsi_read_interrupt_mask(dsim);
@@ -226,7 +220,7 @@ int exynos_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 	case MIPI_DSI_DCS_LONG_WRITE:
 	{
 		unsigned int size, payload = 0;
-		INIT_COMPLETION(dsim_wr_comp);
+		reinit_completion(&dsim_wr_comp);
 
 		size = data_size * 4;
 
@@ -288,9 +282,6 @@ int exynos_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 		mutex_unlock(&dsim->lock);
 		return -EINVAL;
 	}
-
-	mutex_unlock(&dsim->lock);
-	return 0;
 }
 
 static unsigned int exynos_mipi_dsi_long_data_rd(struct mipi_dsim_device *dsim,
@@ -365,7 +356,7 @@ int exynos_mipi_dsi_rd_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 	msleep(20);
 
 	mutex_lock(&dsim->lock);
-	INIT_COMPLETION(dsim_rd_comp);
+	reinit_completion(&dsim_rd_comp);
 	exynos_mipi_dsi_rd_tx_header(dsim,
 		MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE, req_size);
 
@@ -385,6 +376,7 @@ int exynos_mipi_dsi_rd_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 			"data id %x is not supported current DSI spec.\n",
 			data_id);
 
+		mutex_unlock(&dsim->lock);
 		return -EINVAL;
 	}
 
@@ -676,7 +668,7 @@ int exynos_mipi_dsi_init_dsim(struct mipi_dsim_device *dsim)
 	default:
 		dev_info(dsim->dev, "data lane is invalid.\n");
 		return -EINVAL;
-	};
+	}
 
 	exynos_mipi_dsi_sw_reset(dsim);
 	exynos_mipi_dsi_func_reset(dsim);

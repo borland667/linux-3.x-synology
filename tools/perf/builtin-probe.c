@@ -37,7 +37,7 @@
 #include "util/strfilter.h"
 #include "util/symbol.h"
 #include "util/debug.h"
-#include "util/debugfs.h"
+#include <lk/debugfs.h>
 #include "util/parse-options.h"
 #include "util/probe-finder.h"
 #include "util/probe-event.h"
@@ -143,8 +143,8 @@ static int parse_probe_event_argv(int argc, const char **argv)
 	return ret;
 }
 
-static int opt_add_probe_event(const struct option *opt __used,
-			      const char *str, int unset __used)
+static int opt_add_probe_event(const struct option *opt __maybe_unused,
+			      const char *str, int unset __maybe_unused)
 {
 	if (str) {
 		params.mod_events = true;
@@ -153,8 +153,8 @@ static int opt_add_probe_event(const struct option *opt __used,
 		return 0;
 }
 
-static int opt_del_probe_event(const struct option *opt __used,
-			       const char *str, int unset __used)
+static int opt_del_probe_event(const struct option *opt __maybe_unused,
+			       const char *str, int unset __maybe_unused)
 {
 	if (str) {
 		params.mod_events = true;
@@ -166,14 +166,14 @@ static int opt_del_probe_event(const struct option *opt __used,
 }
 
 static int opt_set_target(const struct option *opt, const char *str,
-			int unset __used)
+			int unset __maybe_unused)
 {
 	int ret = -ENOENT;
 
 	if  (str && !params.target) {
 		if (!strcmp(opt->long_name, "exec"))
 			params.uprobes = true;
-#ifdef DWARF_SUPPORT
+#ifdef HAVE_DWARF_SUPPORT
 		else if (!strcmp(opt->long_name, "module"))
 			params.uprobes = false;
 #endif
@@ -187,9 +187,9 @@ static int opt_set_target(const struct option *opt, const char *str,
 	return ret;
 }
 
-#ifdef DWARF_SUPPORT
-static int opt_show_lines(const struct option *opt __used,
-			  const char *str, int unset __used)
+#ifdef HAVE_DWARF_SUPPORT
+static int opt_show_lines(const struct option *opt __maybe_unused,
+			  const char *str, int unset __maybe_unused)
 {
 	int ret = 0;
 
@@ -209,8 +209,8 @@ static int opt_show_lines(const struct option *opt __used,
 	return ret;
 }
 
-static int opt_show_vars(const struct option *opt __used,
-			 const char *str, int unset __used)
+static int opt_show_vars(const struct option *opt __maybe_unused,
+			 const char *str, int unset __maybe_unused)
 {
 	struct perf_probe_event *pev = &params.events[params.nevents];
 	int ret;
@@ -229,8 +229,8 @@ static int opt_show_vars(const struct option *opt __used,
 }
 #endif
 
-static int opt_set_filter(const struct option *opt __used,
-			  const char *str, int unset __used)
+static int opt_set_filter(const struct option *opt __maybe_unused,
+			  const char *str, int unset __maybe_unused)
 {
 	const char *err;
 
@@ -250,19 +250,20 @@ static int opt_set_filter(const struct option *opt __used,
 	return 0;
 }
 
-static const char * const probe_usage[] = {
-	"perf probe [<options>] 'PROBEDEF' ['PROBEDEF' ...]",
-	"perf probe [<options>] --add 'PROBEDEF' [--add 'PROBEDEF' ...]",
-	"perf probe [<options>] --del '[GROUP:]EVENT' ...",
-	"perf probe --list",
-#ifdef DWARF_SUPPORT
-	"perf probe [<options>] --line 'LINEDESC'",
-	"perf probe [<options>] --vars 'PROBEPOINT'",
+int cmd_probe(int argc, const char **argv, const char *prefix __maybe_unused)
+{
+	const char * const probe_usage[] = {
+		"perf probe [<options>] 'PROBEDEF' ['PROBEDEF' ...]",
+		"perf probe [<options>] --add 'PROBEDEF' [--add 'PROBEDEF' ...]",
+		"perf probe [<options>] --del '[GROUP:]EVENT' ...",
+		"perf probe --list",
+#ifdef HAVE_DWARF_SUPPORT
+		"perf probe [<options>] --line 'LINEDESC'",
+		"perf probe [<options>] --vars 'PROBEPOINT'",
 #endif
-	NULL
+		NULL
 };
-
-static const struct option options[] = {
+	const struct option options[] = {
 	OPT_INCR('v', "verbose", &verbose,
 		    "be more verbose (show parsed arguments, etc)"),
 	OPT_BOOLEAN('l', "list", &params.list_events,
@@ -270,7 +271,7 @@ static const struct option options[] = {
 	OPT_CALLBACK('d', "del", NULL, "[GROUP:]EVENT", "delete a probe event.",
 		opt_del_probe_event),
 	OPT_CALLBACK('a', "add", NULL,
-#ifdef DWARF_SUPPORT
+#ifdef HAVE_DWARF_SUPPORT
 		"[EVENT=]FUNC[@SRC][+OFF|%return|:RL|;PT]|SRC:AL|SRC;PT"
 		" [[NAME=]ARG ...]",
 #else
@@ -282,7 +283,7 @@ static const struct option options[] = {
 		"\t\tFUNC:\tFunction name\n"
 		"\t\tOFF:\tOffset from function entry (in byte)\n"
 		"\t\t%return:\tPut the probe at function return\n"
-#ifdef DWARF_SUPPORT
+#ifdef HAVE_DWARF_SUPPORT
 		"\t\tSRC:\tSource code path\n"
 		"\t\tRL:\tRelative line number from function entry.\n"
 		"\t\tAL:\tAbsolute line number in file.\n"
@@ -295,7 +296,7 @@ static const struct option options[] = {
 		opt_add_probe_event),
 	OPT_BOOLEAN('f', "force", &params.force_add, "forcibly add events"
 		    " with existing name"),
-#ifdef DWARF_SUPPORT
+#ifdef HAVE_DWARF_SUPPORT
 	OPT_CALLBACK('L', "line", NULL,
 		     "FUNC[:RLN[+NUM|-RLN2]]|SRC:ALN[+NUM|-ALN2]",
 		     "Show source code lines.", opt_show_lines),
@@ -324,11 +325,10 @@ static const struct option options[] = {
 		     opt_set_filter),
 	OPT_CALLBACK('x', "exec", NULL, "executable|path",
 			"target executable name or path", opt_set_target),
+	OPT_BOOLEAN(0, "demangle", &symbol_conf.demangle,
+		    "Disable symbol demangling"),
 	OPT_END()
-};
-
-int cmd_probe(int argc, const char **argv, const char *prefix __used)
-{
+	};
 	int ret;
 
 	argc = parse_options(argc, argv, options, probe_usage,
@@ -410,7 +410,7 @@ int cmd_probe(int argc, const char **argv, const char *prefix __used)
 		return ret;
 	}
 
-#ifdef DWARF_SUPPORT
+#ifdef HAVE_DWARF_SUPPORT
 	if (params.show_lines && !params.uprobes) {
 		if (params.mod_events) {
 			pr_err("  Error: Don't use --line with"

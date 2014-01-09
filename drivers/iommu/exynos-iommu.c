@@ -247,50 +247,6 @@ static void __sysmmu_set_prefbuf(void __iomem *sfrbase, unsigned long base,
 	__raw_writel(size - 1 + base,  sfrbase + REG_PB0_EADDR + idx * 8);
 }
 
-void exynos_sysmmu_set_prefbuf(struct device *dev,
-				unsigned long base0, unsigned long size0,
-				unsigned long base1, unsigned long size1)
-{
-	struct sysmmu_drvdata *data = dev_get_drvdata(dev->archdata.iommu);
-	unsigned long flags;
-	int i;
-
-	BUG_ON((base0 + size0) <= base0);
-	BUG_ON((size1 > 0) && ((base1 + size1) <= base1));
-
-	read_lock_irqsave(&data->lock, flags);
-	if (!is_sysmmu_active(data))
-		goto finish;
-
-	for (i = 0; i < data->nsfrs; i++) {
-		if ((readl(data->sfrbases[i] + REG_MMU_VERSION) >> 28) == 3) {
-			if (!sysmmu_block(data->sfrbases[i]))
-				continue;
-
-			if (size1 == 0) {
-				if (size0 <= SZ_128K) {
-					base1 = base0;
-					size1 = size0;
-				} else {
-					size1 = size0 -
-						ALIGN(size0 / 2, SZ_64K);
-					size0 = size0 - size1;
-					base1 = base0 + size0;
-				}
-			}
-
-			__sysmmu_set_prefbuf(
-					data->sfrbases[i], base0, size0, 0);
-			__sysmmu_set_prefbuf(
-					data->sfrbases[i], base1, size1, 1);
-
-			sysmmu_unblock(data->sfrbases[i]);
-		}
-	}
-finish:
-	read_unlock_irqrestore(&data->lock, flags);
-}
-
 static void __set_fault_handler(struct sysmmu_drvdata *data,
 					sysmmu_fault_handler_t handler)
 {
@@ -317,7 +273,7 @@ static int default_fault_handler(enum exynos_sysmmu_inttype itype,
 	if ((itype >= SYSMMU_FAULTS_NUM) || (itype < SYSMMU_PAGEFAULT))
 		itype = SYSMMU_FAULT_UNKNOWN;
 
-	pr_err("%s occured at 0x%lx(Page table base: 0x%lx)\n",
+	pr_err("%s occurred at 0x%lx(Page table base: 0x%lx)\n",
 			sysmmu_fault_name[itype], fault_addr, pgtable_base);
 
 	ent = section_entry(__va(pgtable_base), fault_addr);
@@ -511,7 +467,7 @@ int exynos_sysmmu_enable(struct device *dev, unsigned long pgtable)
 	return ret;
 }
 
-bool exynos_sysmmu_disable(struct device *dev)
+static bool exynos_sysmmu_disable(struct device *dev)
 {
 	struct sysmmu_drvdata *data = dev_get_drvdata(dev->archdata.iommu);
 	bool disabled;
@@ -732,6 +688,10 @@ static int exynos_iommu_domain_init(struct iommu_domain *domain)
 	spin_lock_init(&priv->pgtablelock);
 	INIT_LIST_HEAD(&priv->clients);
 
+	domain->geometry.aperture_start = 0;
+	domain->geometry.aperture_end   = ~0UL;
+	domain->geometry.force_aperture = true;
+
 	domain->priv = priv;
 	return 0;
 
@@ -836,8 +796,7 @@ static void exynos_iommu_detach_device(struct iommu_domain *domain,
 	if (__exynos_sysmmu_disable(data)) {
 		dev_dbg(dev, "%s: Detached IOMMU with pgtable %#lx\n",
 					__func__, __pa(priv->pgtable));
-		list_del(&data->node);
-		INIT_LIST_HEAD(&data->node);
+		list_del_init(&data->node);
 
 	} else {
 		dev_dbg(dev, "%s: Detaching IOMMU with pgtable %#lx delayed",
@@ -1024,7 +983,7 @@ done:
 }
 
 static phys_addr_t exynos_iommu_iova_to_phys(struct iommu_domain *domain,
-					  unsigned long iova)
+					  dma_addr_t iova)
 {
 	struct exynos_iommu_domain *priv = domain->priv;
 	unsigned long *entry;

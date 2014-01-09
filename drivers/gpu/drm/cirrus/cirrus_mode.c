@@ -14,9 +14,8 @@
  *
  * Copyright 1999-2001 Jeff Garzik <jgarzik@pobox.com>
  */
-#include "drmP.h"
-#include "drm.h"
-#include "drm_crtc_helper.h"
+#include <drm/drmP.h>
+#include <drm/drm_crtc_helper.h>
 
 #include <video/cirrus.h>
 
@@ -97,7 +96,7 @@ static void cirrus_crtc_dpms(struct drm_crtc *crtc, int mode)
  * to just pass that straight through, so this does nothing
  */
 static bool cirrus_crtc_mode_fixup(struct drm_crtc *crtc,
-				   struct drm_display_mode *mode,
+				   const struct drm_display_mode *mode,
 				   struct drm_display_mode *adjusted_mode)
 {
 	return true;
@@ -429,8 +428,8 @@ void cirrus_crtc_fb_gamma_get(struct drm_crtc *crtc, u16 *red, u16 *green,
 
 
 static bool cirrus_encoder_mode_fixup(struct drm_encoder *encoder,
-				  struct drm_display_mode *mode,
-				  struct drm_display_mode *adjusted_mode)
+				      const struct drm_display_mode *mode,
+				      struct drm_display_mode *adjusted_mode)
 {
 	return true;
 }
@@ -495,13 +494,12 @@ static struct drm_encoder *cirrus_encoder_init(struct drm_device *dev)
 
 int cirrus_vga_get_modes(struct drm_connector *connector)
 {
-	/* Just add a static list of modes */
-	drm_add_modes_noedid(connector, 640, 480);
-	drm_add_modes_noedid(connector, 800, 600);
-	drm_add_modes_noedid(connector, 1024, 768);
-	drm_add_modes_noedid(connector, 1280, 1024);
+	int count;
 
-	return 4;
+	/* Just add a static list of modes */
+	count = drm_add_modes_noedid(connector, 1280, 1024);
+	drm_set_preferred_mode(connector, 1024, 768);
+	return count;
 }
 
 static int cirrus_vga_mode_valid(struct drm_connector *connector,

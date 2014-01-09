@@ -46,6 +46,7 @@ static int smbus_do_alert(struct device *dev, void *addrp)
 {
 	struct i2c_client *client = i2c_verify_client(dev);
 	struct alert_data *data = addrp;
+	struct i2c_driver *driver;
 
 	if (!client || client->addr != data->addr)
 		return 0;
@@ -54,12 +55,13 @@ static int smbus_do_alert(struct device *dev, void *addrp)
 
 	/*
 	 * Drivers should either disable alerts, or provide at least
-	 * a minimal handler.  Lock so client->driver won't change.
+	 * a minimal handler.  Lock so the driver won't change.
 	 */
 	device_lock(dev);
-	if (client->driver) {
-		if (client->driver->alert)
-			client->driver->alert(client, data->flag);
+	if (client->dev.driver) {
+		driver = to_i2c_driver(client->dev.driver);
+		if (driver->alert)
+			driver->alert(client, data->flag);
 		else
 			dev_warn(&client->dev, "no driver alert()!\n");
 	} else
@@ -137,12 +139,13 @@ static irqreturn_t smbalert_irq(int irq, void *d)
 static int smbalert_probe(struct i2c_client *ara,
 			  const struct i2c_device_id *id)
 {
-	struct i2c_smbus_alert_setup *setup = ara->dev.platform_data;
+	struct i2c_smbus_alert_setup *setup = dev_get_platdata(&ara->dev);
 	struct i2c_smbus_alert *alert;
 	struct i2c_adapter *adapter = ara->adapter;
 	int res;
 
-	alert = kzalloc(sizeof(struct i2c_smbus_alert), GFP_KERNEL);
+	alert = devm_kzalloc(&ara->dev, sizeof(struct i2c_smbus_alert),
+			     GFP_KERNEL);
 	if (!alert)
 		return -ENOMEM;
 
@@ -154,10 +157,8 @@ static int smbalert_probe(struct i2c_client *ara,
 	if (setup->irq > 0) {
 		res = devm_request_irq(&ara->dev, setup->irq, smbalert_irq,
 				       0, "smbus_alert", alert);
-		if (res) {
-			kfree(alert);
+		if (res)
 			return res;
-		}
 	}
 
 	i2c_set_clientdata(ara, alert);
@@ -167,14 +168,12 @@ static int smbalert_probe(struct i2c_client *ara,
 	return 0;
 }
 
-/* IRQ resource is managed so it is freed automatically */
+/* IRQ and memory resources are managed so they are freed automatically */
 static int smbalert_remove(struct i2c_client *ara)
 {
 	struct i2c_smbus_alert *alert = i2c_get_clientdata(ara);
 
 	cancel_work_sync(&alert->alert);
-
-	kfree(alert);
 	return 0;
 }
 
@@ -245,18 +244,7 @@ int i2c_handle_smbus_alert(struct i2c_client *ara)
 }
 EXPORT_SYMBOL_GPL(i2c_handle_smbus_alert);
 
-static int __init i2c_smbus_init(void)
-{
-	return i2c_add_driver(&smbalert_driver);
-}
-
-static void __exit i2c_smbus_exit(void)
-{
-	i2c_del_driver(&smbalert_driver);
-}
-
-module_init(i2c_smbus_init);
-module_exit(i2c_smbus_exit);
+module_i2c_driver(smbalert_driver);
 
 MODULE_AUTHOR("Jean Delvare <khali@linux-fr.org>");
 MODULE_DESCRIPTION("SMBus protocol extensions support");

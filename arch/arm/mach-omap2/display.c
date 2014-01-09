@@ -25,18 +25,20 @@
 #include <linux/delay.h>
 
 #include <video/omapdss.h>
-#include <plat/omap_hwmod.h>
-#include <plat/omap_device.h>
-#include <plat/omap-pm.h>
+#include "omap_hwmod.h"
+#include "omap_device.h"
+#include "omap-pm.h"
 #include "common.h"
 
+#include "soc.h"
 #include "iomap.h"
-#include "mux.h"
 #include "control.h"
 #include "display.h"
+#include "prm.h"
 
 #define DISPC_CONTROL		0x0040
 #define DISPC_CONTROL2		0x0238
+#define DISPC_CONTROL3		0x0848
 #define DISPC_IRQSTATUS		0x0018
 
 #define DSS_SYSCONFIG		0x10
@@ -52,6 +54,7 @@
 #define EVSYNC_EVEN_IRQ_SHIFT	2
 #define EVSYNC_ODD_IRQ_SHIFT	3
 #define FRAMEDONE2_IRQ_SHIFT	22
+#define FRAMEDONE3_IRQ_SHIFT	30
 #define FRAMEDONETV_IRQ_SHIFT	24
 
 /*
@@ -74,14 +77,14 @@ struct omap_dss_hwmod_data {
 	const int id;
 };
 
-static const struct omap_dss_hwmod_data omap2_dss_hwmod_data[] __initdata = {
+static const struct omap_dss_hwmod_data omap2_dss_hwmod_data[] __initconst = {
 	{ "dss_core", "omapdss_dss", -1 },
 	{ "dss_dispc", "omapdss_dispc", -1 },
 	{ "dss_rfbi", "omapdss_rfbi", -1 },
 	{ "dss_venc", "omapdss_venc", -1 },
 };
 
-static const struct omap_dss_hwmod_data omap3_dss_hwmod_data[] __initdata = {
+static const struct omap_dss_hwmod_data omap3_dss_hwmod_data[] __initconst = {
 	{ "dss_core", "omapdss_dss", -1 },
 	{ "dss_dispc", "omapdss_dispc", -1 },
 	{ "dss_rfbi", "omapdss_rfbi", -1 },
@@ -89,41 +92,14 @@ static const struct omap_dss_hwmod_data omap3_dss_hwmod_data[] __initdata = {
 	{ "dss_dsi1", "omapdss_dsi", 0 },
 };
 
-static const struct omap_dss_hwmod_data omap4_dss_hwmod_data[] __initdata = {
+static const struct omap_dss_hwmod_data omap4_dss_hwmod_data[] __initconst = {
 	{ "dss_core", "omapdss_dss", -1 },
 	{ "dss_dispc", "omapdss_dispc", -1 },
 	{ "dss_rfbi", "omapdss_rfbi", -1 },
-	{ "dss_venc", "omapdss_venc", -1 },
 	{ "dss_dsi1", "omapdss_dsi", 0 },
 	{ "dss_dsi2", "omapdss_dsi", 1 },
 	{ "dss_hdmi", "omapdss_hdmi", -1 },
 };
-
-static void __init omap4_hdmi_mux_pads(enum omap_hdmi_flags flags)
-{
-	u32 reg;
-	u16 control_i2c_1;
-
-	omap_mux_init_signal("hdmi_cec",
-			OMAP_PIN_INPUT_PULLUP);
-	omap_mux_init_signal("hdmi_ddc_scl",
-			OMAP_PIN_INPUT_PULLUP);
-	omap_mux_init_signal("hdmi_ddc_sda",
-			OMAP_PIN_INPUT_PULLUP);
-
-	/*
-	 * CONTROL_I2C_1: HDMI_DDC_SDA_PULLUPRESX (bit 28) and
-	 * HDMI_DDC_SCL_PULLUPRESX (bit 24) are set to disable
-	 * internal pull up resistor.
-	 */
-	if (flags & OMAP_HDMI_SDA_SCL_EXTERNAL_PULLUP) {
-		control_i2c_1 = OMAP4_CTRL_MODULE_PAD_CORE_CONTROL_I2C_1;
-		reg = omap4_ctrl_pad_readl(control_i2c_1);
-		reg |= (OMAP4_HDMI_DDC_SDA_PULLUPRESX_MASK |
-			OMAP4_HDMI_DDC_SCL_PULLUPRESX_MASK);
-			omap4_ctrl_pad_writel(reg, control_i2c_1);
-	}
-}
 
 static int omap4_dsi_mux_pads(int dsi_id, unsigned lanes)
 {
@@ -154,14 +130,6 @@ static int omap4_dsi_mux_pads(int dsi_id, unsigned lanes)
 	reg |= (lanes << pipd_shift) & pipd_mask;
 
 	omap4_ctrl_pad_writel(reg, OMAP4_CTRL_MODULE_PAD_CORE_CONTROL_DSIPHY);
-
-	return 0;
-}
-
-int __init omap_hdmi_init(enum omap_hdmi_flags flags)
-{
-	if (cpu_is_omap44xx())
-		omap4_hdmi_mux_pads(flags);
 
 	return 0;
 }
@@ -218,8 +186,8 @@ static struct platform_device *create_dss_pdev(const char *pdev_name,
 		dev_set_name(&pdev->dev, "%s", pdev->name);
 
 	ohs[0] = oh;
-	od = omap_device_alloc(pdev, ohs, 1, NULL, 0);
-	if (!od) {
+	od = omap_device_alloc(pdev, ohs, 1);
+	if (IS_ERR(od)) {
 		pr_err("Could not alloc omap_device for %s\n", pdev_name);
 		r = -ENOMEM;
 		goto err;
@@ -283,6 +251,35 @@ err:
 	return ERR_PTR(r);
 }
 
+static enum omapdss_version __init omap_display_get_version(void)
+{
+	if (cpu_is_omap24xx())
+		return OMAPDSS_VER_OMAP24xx;
+	else if (cpu_is_omap3630())
+		return OMAPDSS_VER_OMAP3630;
+	else if (cpu_is_omap34xx()) {
+		if (soc_is_am35xx()) {
+			return OMAPDSS_VER_AM35xx;
+		} else {
+			if (omap_rev() < OMAP3430_REV_ES3_0)
+				return OMAPDSS_VER_OMAP34xx_ES1;
+			else
+				return OMAPDSS_VER_OMAP34xx_ES3;
+		}
+	} else if (omap_rev() == OMAP4430_REV_ES1_0)
+		return OMAPDSS_VER_OMAP4430_ES1;
+	else if (omap_rev() == OMAP4430_REV_ES2_0 ||
+			omap_rev() == OMAP4430_REV_ES2_1 ||
+			omap_rev() == OMAP4430_REV_ES2_2)
+		return OMAPDSS_VER_OMAP4430_ES2;
+	else if (cpu_is_omap44xx())
+		return OMAPDSS_VER_OMAP4;
+	else if (soc_is_omap54xx())
+		return OMAPDSS_VER_OMAP5;
+	else
+		return OMAPDSS_VER_UNKNOWN;
+}
+
 int __init omap_display_init(struct omap_dss_board_info *board_data)
 {
 	int r = 0;
@@ -290,9 +287,18 @@ int __init omap_display_init(struct omap_dss_board_info *board_data)
 	int i, oh_count;
 	const struct omap_dss_hwmod_data *curr_dss_hwmod;
 	struct platform_device *dss_pdev;
+	enum omapdss_version ver;
 
 	/* create omapdss device */
 
+	ver = omap_display_get_version();
+
+	if (ver == OMAPDSS_VER_UNKNOWN) {
+		pr_err("DSS not supported on this SoC\n");
+		return -ENODEV;
+	}
+
+	board_data->version = ver;
 	board_data->dsi_enable_pads = omap_dsi_enable_pads;
 	board_data->dsi_disable_pads = omap_dsi_disable_pads;
 	board_data->get_context_loss_count = omap_pm_get_dev_context_loss_count;
@@ -354,7 +360,7 @@ int __init omap_display_init(struct omap_dss_board_info *board_data)
 
 	/* Create devices for DPI and SDI */
 
-	pdev = create_simple_dss_pdev("omapdss_dpi", -1,
+	pdev = create_simple_dss_pdev("omapdss_dpi", 0,
 			board_data, sizeof(*board_data), dss_pdev);
 	if (IS_ERR(pdev)) {
 		pr_err("Could not build platform_device for omapdss_dpi\n");
@@ -362,12 +368,40 @@ int __init omap_display_init(struct omap_dss_board_info *board_data)
 	}
 
 	if (cpu_is_omap34xx()) {
-		pdev = create_simple_dss_pdev("omapdss_sdi", -1,
+		pdev = create_simple_dss_pdev("omapdss_sdi", 0,
 				board_data, sizeof(*board_data), dss_pdev);
 		if (IS_ERR(pdev)) {
 			pr_err("Could not build platform_device for omapdss_sdi\n");
 			return PTR_ERR(pdev);
 		}
+	}
+
+	/* create DRM device */
+	r = omap_init_drm();
+	if (r < 0) {
+		pr_err("Unable to register omapdrm device\n");
+		return r;
+	}
+
+	/* create vrfb device */
+	r = omap_init_vrfb();
+	if (r < 0) {
+		pr_err("Unable to register omapvrfb device\n");
+		return r;
+	}
+
+	/* create FB device */
+	r = omap_init_fb();
+	if (r < 0) {
+		pr_err("Unable to register omapfb device\n");
+		return r;
+	}
+
+	/* create V4L2 display device */
+	r = omap_init_vout();
+	if (r < 0) {
+		pr_err("Unable to register omap_vout device\n");
+		return r;
 	}
 
 	return 0;
@@ -376,7 +410,7 @@ int __init omap_display_init(struct omap_dss_board_info *board_data)
 static void dispc_disable_outputs(void)
 {
 	u32 v, irq_mask = 0;
-	bool lcd_en, digit_en, lcd2_en = false;
+	bool lcd_en, digit_en, lcd2_en = false, lcd3_en = false;
 	int i;
 	struct omap_dss_dispc_dev_attr *da;
 	struct omap_hwmod *oh;
@@ -405,7 +439,13 @@ static void dispc_disable_outputs(void)
 		lcd2_en = v & LCD_EN_MASK;
 	}
 
-	if (!(lcd_en | digit_en | lcd2_en))
+	/* store value of LCDENABLE for LCD3 */
+	if (da->manager_count > 3) {
+		v = omap_hwmod_read(oh, DISPC_CONTROL3);
+		lcd3_en = v & LCD_EN_MASK;
+	}
+
+	if (!(lcd_en | digit_en | lcd2_en | lcd3_en))
 		return; /* no managers currently enabled */
 
 	/*
@@ -426,10 +466,12 @@ static void dispc_disable_outputs(void)
 
 	if (lcd2_en)
 		irq_mask |= 1 << FRAMEDONE2_IRQ_SHIFT;
+	if (lcd3_en)
+		irq_mask |= 1 << FRAMEDONE3_IRQ_SHIFT;
 
 	/*
 	 * clear any previous FRAMEDONE, FRAMEDONETV,
-	 * EVSYNC_EVEN/ODD or FRAMEDONE2 interrupts
+	 * EVSYNC_EVEN/ODD, FRAMEDONE2 or FRAMEDONE3 interrupts
 	 */
 	omap_hwmod_write(irq_mask, oh, DISPC_IRQSTATUS);
 
@@ -445,19 +487,25 @@ static void dispc_disable_outputs(void)
 		omap_hwmod_write(v, oh, DISPC_CONTROL2);
 	}
 
+	/* disable LCD3 manager */
+	if (da->manager_count > 3) {
+		v = omap_hwmod_read(oh, DISPC_CONTROL3);
+		v &= ~LCD_EN_MASK;
+		omap_hwmod_write(v, oh, DISPC_CONTROL3);
+	}
+
 	i = 0;
 	while ((omap_hwmod_read(oh, DISPC_IRQSTATUS) & irq_mask) !=
 	       irq_mask) {
 		i++;
 		if (i > FRAMEDONE_IRQ_TIMEOUT) {
-			pr_err("didn't get FRAMEDONE1/2 or TV interrupt\n");
+			pr_err("didn't get FRAMEDONE1/2/3 or TV interrupt\n");
 			break;
 		}
 		mdelay(1);
 	}
 }
 
-#define MAX_MODULE_SOFTRESET_WAIT	10000
 int omap_dss_reset(struct omap_hwmod *oh)
 {
 	struct omap_hwmod_opt_clk *oc;
@@ -471,7 +519,7 @@ int omap_dss_reset(struct omap_hwmod *oh)
 
 	for (i = oh->opt_clks_cnt, oc = oh->opt_clks; i > 0; i--, oc++)
 		if (oc->_clk)
-			clk_enable(oc->_clk);
+			clk_prepare_enable(oc->_clk);
 
 	dispc_disable_outputs();
 
@@ -498,7 +546,7 @@ int omap_dss_reset(struct omap_hwmod *oh)
 
 	for (i = oh->opt_clks_cnt, oc = oh->opt_clks; i > 0; i--, oc++)
 		if (oc->_clk)
-			clk_disable(oc->_clk);
+			clk_disable_unprepare(oc->_clk);
 
 	r = (c == MAX_MODULE_SOFTRESET_WAIT) ? -ETIMEDOUT : 0;
 

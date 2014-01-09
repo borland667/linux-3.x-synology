@@ -31,11 +31,6 @@
 
 struct workqueue_struct *gfs2_control_wq;
 
-static struct shrinker qd_shrinker = {
-	.shrink = gfs2_shrink_qd_memory,
-	.seeks = DEFAULT_SEEKS,
-};
-
 static void gfs2_init_inode_once(void *foo)
 {
 	struct gfs2_inode *ip = foo;
@@ -43,7 +38,6 @@ static void gfs2_init_inode_once(void *foo)
 	inode_init_once(&ip->i_inode);
 	init_rwsem(&ip->i_rw_mutex);
 	INIT_LIST_HEAD(&ip->i_trunc_list);
-	ip->i_qadata = NULL;
 	ip->i_res = NULL;
 	ip->i_hash_cache = NULL;
 }
@@ -86,6 +80,10 @@ static int __init init_gfs2_fs(void)
 	error = gfs2_sys_init();
 	if (error)
 		return error;
+
+	error = list_lru_init(&gfs2_qd_lru);
+	if (error)
+		goto fail_lru;
 
 	error = gfs2_glock_init();
 	if (error)
@@ -139,7 +137,7 @@ static int __init init_gfs2_fs(void)
 	if (!gfs2_rsrv_cachep)
 		goto fail;
 
-	register_shrinker(&qd_shrinker);
+	register_shrinker(&gfs2_qd_shrinker);
 
 	error = register_filesystem(&gfs2_fs_type);
 	if (error)
@@ -156,7 +154,7 @@ static int __init init_gfs2_fs(void)
 		goto fail_wq;
 
 	gfs2_control_wq = alloc_workqueue("gfs2_control",
-			       WQ_NON_REENTRANT | WQ_UNBOUND | WQ_FREEZABLE, 0);
+					  WQ_UNBOUND | WQ_FREEZABLE, 0);
 	if (!gfs2_control_wq)
 		goto fail_recovery;
 
@@ -179,7 +177,9 @@ fail_wq:
 fail_unregister:
 	unregister_filesystem(&gfs2_fs_type);
 fail:
-	unregister_shrinker(&qd_shrinker);
+	list_lru_destroy(&gfs2_qd_lru);
+fail_lru:
+	unregister_shrinker(&gfs2_qd_shrinker);
 	gfs2_glock_exit();
 
 	if (gfs2_rsrv_cachep)
@@ -214,13 +214,14 @@ fail:
 
 static void __exit exit_gfs2_fs(void)
 {
-	unregister_shrinker(&qd_shrinker);
+	unregister_shrinker(&gfs2_qd_shrinker);
 	gfs2_glock_exit();
 	gfs2_unregister_debugfs();
 	unregister_filesystem(&gfs2_fs_type);
 	unregister_filesystem(&gfs2meta_fs_type);
 	destroy_workqueue(gfs_recovery_wq);
 	destroy_workqueue(gfs2_control_wq);
+	list_lru_destroy(&gfs2_qd_lru);
 
 	rcu_barrier();
 

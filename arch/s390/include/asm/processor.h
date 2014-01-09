@@ -1,8 +1,6 @@
 /*
- *  include/asm-s390/processor.h
- *
  *  S390 version
- *    Copyright (C) 1999 IBM Deutschland Entwicklung GmbH, IBM Corporation
+ *    Copyright IBM Corp. 1999
  *    Author(s): Hartmut Penner (hp@de.ibm.com),
  *               Martin Schwidefsky (schwidefsky@de.ibm.com)
  *
@@ -13,12 +11,15 @@
 #ifndef __ASM_S390_PROCESSOR_H
 #define __ASM_S390_PROCESSOR_H
 
+#ifndef __ASSEMBLY__
+
 #include <linux/linkage.h>
 #include <linux/irqflags.h>
 #include <asm/cpu.h>
 #include <asm/page.h>
 #include <asm/ptrace.h>
 #include <asm/setup.h>
+#include <asm/runtime_instr.h>
 
 /*
  * Default implementation of macro that returns current
@@ -34,6 +35,7 @@ static inline void get_cpu_id(struct cpuid *ptr)
 extern void s390_adjust_jiffies(void);
 extern const struct seq_operations cpuinfo_op;
 extern int sysctl_ieee_emulation_warnings;
+extern void execve_tail(void);
 
 /*
  * User space process size: 2GB for 31 bit, 4TB or 8PT for 64 bit.
@@ -41,6 +43,7 @@ extern int sysctl_ieee_emulation_warnings;
 #ifndef CONFIG_64BIT
 
 #define TASK_SIZE		(1UL << 31)
+#define TASK_MAX_SIZE		(1UL << 31)
 #define TASK_UNMAPPED_BASE	(1UL << 30)
 
 #else /* CONFIG_64BIT */
@@ -49,6 +52,7 @@ extern int sysctl_ieee_emulation_warnings;
 #define TASK_UNMAPPED_BASE	(test_thread_flag(TIF_31BIT) ? \
 					(1UL << 30) : (1UL << 41))
 #define TASK_SIZE		TASK_SIZE_OF(current)
+#define TASK_MAX_SIZE		(1UL << 53)
 
 #endif /* CONFIG_64BIT */
 
@@ -77,10 +81,27 @@ struct thread_struct {
 	unsigned long gmap_addr;	/* address of last gmap fault. */
 	struct per_regs per_user;	/* User specified PER registers */
 	struct per_event per_event;	/* Cause of the last PER trap */
+	unsigned long per_flags;	/* Flags to control debug behavior */
         /* pfault_wait is used to block the process on a pfault event */
 	unsigned long pfault_wait;
 	struct list_head list;
+	/* cpu runtime instrumentation */
+	struct runtime_instr_cb *ri_cb;
+	int ri_signum;
+#ifdef CONFIG_64BIT
+	unsigned char trap_tdb[256];	/* Transaction abort diagnose block */
+#endif
 };
+
+/* Flag to disable transactions. */
+#define PER_FLAG_NO_TE			1UL
+/* Flag to enable random transaction aborts. */
+#define PER_FLAG_TE_ABORT_RAND		2UL
+/* Flag to specify random transaction abort mode:
+ * - abort each transaction at a random instruction before TEND if set.
+ * - abort random transactions at a random instruction if cleared.
+ */
+#define PER_FLAG_TE_ABORT_RAND_TEND	4UL
 
 typedef struct thread_struct thread_struct;
 
@@ -113,16 +134,18 @@ struct stack_frame {
  * Do necessary setup to start up a new thread.
  */
 #define start_thread(regs, new_psw, new_stackp) do {			\
-	regs->psw.mask	= psw_user_bits | PSW_MASK_EA | PSW_MASK_BA;	\
+	regs->psw.mask	= PSW_USER_BITS | PSW_MASK_EA | PSW_MASK_BA;	\
 	regs->psw.addr	= new_psw | PSW_ADDR_AMODE;			\
 	regs->gprs[15]	= new_stackp;					\
+	execve_tail();							\
 } while (0)
 
 #define start_thread31(regs, new_psw, new_stackp) do {			\
-	regs->psw.mask	= psw_user_bits | PSW_MASK_BA;			\
+	regs->psw.mask	= PSW_USER_BITS | PSW_MASK_BA;			\
 	regs->psw.addr	= new_psw | PSW_ADDR_AMODE;			\
 	regs->gprs[15]	= new_stackp;					\
 	crst_table_downgrade(current->mm, 1UL << 31);			\
+	execve_tail();							\
 } while (0)
 
 /* Forward declaration, a strange C thing */
@@ -130,22 +153,28 @@ struct task_struct;
 struct mm_struct;
 struct seq_file;
 
+#ifdef CONFIG_64BIT
+extern void show_cacheinfo(struct seq_file *m);
+#else
+static inline void show_cacheinfo(struct seq_file *m) { }
+#endif
+
 /* Free all resources held by a thread. */
 extern void release_thread(struct task_struct *);
-extern int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags);
 
 /*
  * Return saved PC of a blocked thread.
  */
 extern unsigned long thread_saved_pc(struct task_struct *t);
 
-extern void show_code(struct pt_regs *regs);
-
 unsigned long get_wchan(struct task_struct *p);
 #define task_pt_regs(tsk) ((struct pt_regs *) \
         (task_stack_page(tsk) + THREAD_SIZE) - 1)
 #define KSTK_EIP(tsk)	(task_pt_regs(tsk)->psw.addr)
 #define KSTK_ESP(tsk)	(task_pt_regs(tsk)->gprs[15])
+
+/* Has task runtime instrumentation enabled ? */
+#define is_ri_task(tsk) (!!(tsk)->thread.ri_cb)
 
 static inline unsigned short stap(void)
 {
@@ -164,6 +193,8 @@ static inline void cpu_relax(void)
 		asm volatile("diag 0,0,68");
 	barrier();
 }
+
+#define arch_mutex_cpu_relax()  barrier()
 
 static inline void psw_set_key(unsigned int key)
 {
@@ -313,9 +344,9 @@ __set_psw_mask(unsigned long mask)
 }
 
 #define local_mcck_enable() \
-	__set_psw_mask(psw_kernel_bits | PSW_MASK_DAT | PSW_MASK_MCHECK)
+	__set_psw_mask(PSW_KERNEL_BITS | PSW_MASK_DAT | PSW_MASK_MCHECK)
 #define local_mcck_disable() \
-	__set_psw_mask(psw_kernel_bits | PSW_MASK_DAT)
+	__set_psw_mask(PSW_KERNEL_BITS | PSW_MASK_DAT)
 
 /*
  * Basic Machine Check/Program Check Handler.
@@ -331,21 +362,35 @@ extern void (*s390_base_ext_handler_fn)(void);
 
 #define ARCH_LOW_ADDRESS_LIMIT	0x7fffffffUL
 
+extern int memcpy_real(void *, void *, size_t);
+extern void memcpy_absolute(void *, void *, size_t);
+
+#define mem_assign_absolute(dest, val) {			\
+	__typeof__(dest) __tmp = (val);				\
+								\
+	BUILD_BUG_ON(sizeof(__tmp) != sizeof(val));		\
+	memcpy_absolute(&(dest), &__tmp, sizeof(__tmp));	\
+}
+
 /*
  * Helper macro for exception table entries
  */
-#ifndef CONFIG_64BIT
-#define EX_TABLE(_fault,_target)			\
-	".section __ex_table,\"a\"\n"			\
-	"	.align 4\n"				\
-	"	.long  " #_fault "," #_target "\n"	\
+#define EX_TABLE(_fault, _target)	\
+	".section __ex_table,\"a\"\n"	\
+	".align	4\n"			\
+	".long	(" #_fault ") - .\n"	\
+	".long	(" #_target ") - .\n"	\
 	".previous\n"
-#else
-#define EX_TABLE(_fault,_target)			\
-	".section __ex_table,\"a\"\n"			\
-	"	.align 8\n"				\
-	"	.quad  " #_fault "," #_target "\n"	\
-	".previous\n"
-#endif
 
-#endif                                 /* __ASM_S390_PROCESSOR_H           */
+#else /* __ASSEMBLY__ */
+
+#define EX_TABLE(_fault, _target)	\
+	.section __ex_table,"a"	;	\
+	.align	4 ;			\
+	.long	(_fault) - . ;		\
+	.long	(_target) - . ;		\
+	.previous
+
+#endif /* __ASSEMBLY__ */
+
+#endif /* __ASM_S390_PROCESSOR_H */

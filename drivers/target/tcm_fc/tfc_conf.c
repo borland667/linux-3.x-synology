@@ -311,7 +311,11 @@ static struct se_portal_group *ft_add_tpg(
 	 */
 	if (strstr(name, "tpgt_") != name)
 		return NULL;
-	if (strict_strtoul(name + 5, 10, &index) || index > UINT_MAX)
+
+	ret = kstrtoul(name + 5, 10, &index);
+	if (ret)
+		return NULL;
+	if (index > UINT_MAX)
 		return NULL;
 
 	lacl = container_of(wwn, struct ft_lport_acl, fc_lport_wwn);
@@ -495,16 +499,6 @@ static void ft_set_default_node_attr(struct se_node_acl *se_nacl)
 {
 }
 
-static u16 ft_get_fabric_sense_len(void)
-{
-	return 0;
-}
-
-static u16 ft_set_fabric_sense_len(struct se_cmd *se_cmd, u32 sense_len)
-{
-	return 0;
-}
-
 static u32 ft_tpg_get_inst_index(struct se_portal_group *se_tpg)
 {
 	struct ft_tpg *tpg = se_tpg->se_tpg_fabric_ptr;
@@ -542,8 +536,6 @@ static struct target_core_fabric_ops ft_fabric_ops = {
 	.queue_data_in =		ft_queue_data_in,
 	.queue_status =			ft_queue_status,
 	.queue_tm_rsp =			ft_queue_tm_resp,
-	.get_fabric_sense_len =		ft_get_fabric_sense_len,
-	.set_fabric_sense_len =		ft_set_fabric_sense_len,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c
@@ -579,16 +571,16 @@ int ft_register_configfs(void)
 	/*
 	 * Setup default attribute lists for various fabric->tf_cit_tmpl
 	 */
-	TF_CIT_TMPL(fabric)->tfc_wwn_cit.ct_attrs = ft_wwn_attrs;
-	TF_CIT_TMPL(fabric)->tfc_tpg_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_attrib_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_param_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_np_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_base_cit.ct_attrs =
+	fabric->tf_cit_tmpl.tfc_wwn_cit.ct_attrs = ft_wwn_attrs;
+	fabric->tf_cit_tmpl.tfc_tpg_base_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_attrib_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_param_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_np_base_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_base_cit.ct_attrs =
 						    ft_nacl_base_attrs;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_param_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_param_cit.ct_attrs = NULL;
 	/*
 	 * register the fabric for use within TCM
 	 */

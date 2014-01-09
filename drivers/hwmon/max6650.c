@@ -245,7 +245,7 @@ static ssize_t set_target(struct device *dev, struct device_attribute *devattr,
 	if (err)
 		return err;
 
-	rpm = SENSORS_LIMIT(rpm, FAN_RPM_MIN, FAN_RPM_MAX);
+	rpm = clamp_val(rpm, FAN_RPM_MIN, FAN_RPM_MAX);
 
 	/*
 	 * Divide the required speed by 60 to get from rpm to rps, then
@@ -313,7 +313,7 @@ static ssize_t set_pwm(struct device *dev, struct device_attribute *devattr,
 	if (err)
 		return err;
 
-	pwm = SENSORS_LIMIT(pwm, 0, 255);
+	pwm = clamp_val(pwm, 0, 255);
 
 	mutex_lock(&data->update_lock);
 
@@ -545,7 +545,8 @@ static int max6650_probe(struct i2c_client *client,
 	struct max6650_data *data;
 	int err;
 
-	data = kzalloc(sizeof(struct max6650_data), GFP_KERNEL);
+	data = devm_kzalloc(&client->dev, sizeof(struct max6650_data),
+			    GFP_KERNEL);
 	if (!data) {
 		dev_err(&client->dev, "out of memory.\n");
 		return -ENOMEM;
@@ -560,11 +561,11 @@ static int max6650_probe(struct i2c_client *client,
 	 */
 	err = max6650_init_client(client);
 	if (err)
-		goto err_free;
+		return err;
 
 	err = sysfs_create_group(&client->dev.kobj, &max6650_attr_grp);
 	if (err)
-		goto err_free;
+		return err;
 	/* 3 additional fan inputs for the MAX6651 */
 	if (data->nr_fans == 4) {
 		err = sysfs_create_group(&client->dev.kobj, &max6651_attr_grp);
@@ -582,8 +583,6 @@ static int max6650_probe(struct i2c_client *client,
 		sysfs_remove_group(&client->dev.kobj, &max6651_attr_grp);
 err_remove:
 	sysfs_remove_group(&client->dev.kobj, &max6650_attr_grp);
-err_free:
-	kfree(data);
 	return err;
 }
 
@@ -595,7 +594,6 @@ static int max6650_remove(struct i2c_client *client)
 	if (data->nr_fans == 4)
 		sysfs_remove_group(&client->dev.kobj, &max6651_attr_grp);
 	sysfs_remove_group(&client->dev.kobj, &max6650_attr_grp);
-	kfree(data);
 	return 0;
 }
 
@@ -662,7 +660,7 @@ static int max6650_init_client(struct i2c_client *client)
 	/*
 	 * If mode is set to "full off", we change it to "open loop" and
 	 * set DAC to 255, which has the same effect. We do this because
-	 * there's no "full off" mode defined in hwmon specifcations.
+	 * there's no "full off" mode defined in hwmon specifications.
 	 */
 
 	if ((config & MAX6650_CFG_MODE_MASK) == MAX6650_CFG_MODE_OFF) {

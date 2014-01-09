@@ -35,7 +35,7 @@
 
 #include "ieee802154.h"
 
-static int ieee802154_nl_fill_phy(struct sk_buff *msg, u32 pid,
+static int ieee802154_nl_fill_phy(struct sk_buff *msg, u32 portid,
 	u32 seq, int flags, struct wpan_phy *phy)
 {
 	void *hdr;
@@ -77,8 +77,7 @@ out:
 	return -EMSGSIZE;
 }
 
-static int ieee802154_list_phy(struct sk_buff *skb,
-	struct genl_info *info)
+int ieee802154_list_phy(struct sk_buff *skb, struct genl_info *info)
 {
 	/* Request for interface name, index, type, IEEE address,
 	   PAN Id, short address */
@@ -101,11 +100,11 @@ static int ieee802154_list_phy(struct sk_buff *skb,
 	if (!phy)
 		return -ENODEV;
 
-	msg = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg)
 		goto out_dev;
 
-	rc = ieee802154_nl_fill_phy(msg, info->snd_pid, info->snd_seq,
+	rc = ieee802154_nl_fill_phy(msg, info->snd_portid, info->snd_seq,
 			0, phy);
 	if (rc < 0)
 		goto out_free;
@@ -138,7 +137,7 @@ static int ieee802154_dump_phy_iter(struct wpan_phy *phy, void *_data)
 		return 0;
 
 	rc = ieee802154_nl_fill_phy(data->skb,
-			NETLINK_CB(data->cb->skb).pid,
+			NETLINK_CB(data->cb->skb).portid,
 			data->cb->nlh->nlmsg_seq,
 			NLM_F_MULTI,
 			phy);
@@ -151,8 +150,7 @@ static int ieee802154_dump_phy_iter(struct wpan_phy *phy, void *_data)
 	return 0;
 }
 
-static int ieee802154_dump_phy(struct sk_buff *skb,
-	struct netlink_callback *cb)
+int ieee802154_dump_phy(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct dump_phy_data data = {
 		.cb = cb,
@@ -170,8 +168,7 @@ static int ieee802154_dump_phy(struct sk_buff *skb,
 	return skb->len;
 }
 
-static int ieee802154_add_iface(struct sk_buff *skb,
-		struct genl_info *info)
+int ieee802154_add_iface(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *msg;
 	struct wpan_phy *phy;
@@ -273,8 +270,7 @@ out_dev:
 	return rc;
 }
 
-static int ieee802154_del_iface(struct sk_buff *skb,
-		struct genl_info *info)
+int ieee802154_del_iface(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *msg;
 	struct wpan_phy *phy;
@@ -355,29 +351,4 @@ out_dev:
 		dev_put(dev);
 
 	return rc;
-}
-
-static struct genl_ops ieee802154_phy_ops[] = {
-	IEEE802154_DUMP(IEEE802154_LIST_PHY, ieee802154_list_phy,
-							ieee802154_dump_phy),
-	IEEE802154_OP(IEEE802154_ADD_IFACE, ieee802154_add_iface),
-	IEEE802154_OP(IEEE802154_DEL_IFACE, ieee802154_del_iface),
-};
-
-/*
- * No need to unregister as family unregistration will do it.
- */
-int nl802154_phy_register(void)
-{
-	int i;
-	int rc;
-
-	for (i = 0; i < ARRAY_SIZE(ieee802154_phy_ops); i++) {
-		rc = genl_register_ops(&nl802154_family,
-				&ieee802154_phy_ops[i]);
-		if (rc)
-			return rc;
-	}
-
-	return 0;
 }

@@ -13,19 +13,19 @@
  * GNU Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * License along with this program; if not,  see <http://www.gnu.org/licenses>
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 #ifndef _PARSE_EVENTS_H
 #define _PARSE_EVENTS_H
 
+#include <stdbool.h>
 #include <stdarg.h>
 #include <regex.h>
 
-#ifndef __unused
-#define __unused __attribute__ ((unused))
+#ifndef __maybe_unused
+#define __maybe_unused __attribute__((unused))
 #endif
 
 /* ----------------------- trace_seq ----------------------- */
@@ -49,7 +49,7 @@ struct pevent_record {
 	int			cpu;
 	int			ref_count;
 	int			locked;		/* Do not free, even if ref_count is zero */
-	void			*private;
+	void			*priv;
 #if DEBUG_RECORD
 	struct pevent_record	*prev;
 	struct pevent_record	*next;
@@ -70,6 +70,7 @@ struct trace_seq {
 };
 
 void trace_seq_init(struct trace_seq *s);
+void trace_seq_reset(struct trace_seq *s);
 void trace_seq_destroy(struct trace_seq *s);
 
 extern int trace_seq_printf(struct trace_seq *s, const char *fmt, ...)
@@ -106,7 +107,7 @@ struct plugin_option {
 	char				*plugin_alias;
 	char				*description;
 	char				*value;
-	void				*private;
+	void				*priv;
 	int				set;
 };
 
@@ -226,6 +227,11 @@ struct print_arg_symbol {
 	struct print_flag_sym	*symbols;
 };
 
+struct print_arg_hex {
+	struct print_arg	*field;
+	struct print_arg	*size;
+};
+
 struct print_arg_dynarray {
 	struct format_field	*field;
 	struct print_arg	*index;
@@ -253,6 +259,7 @@ enum print_arg_type {
 	PRINT_FIELD,
 	PRINT_FLAGS,
 	PRINT_SYMBOL,
+	PRINT_HEX,
 	PRINT_TYPE,
 	PRINT_STRING,
 	PRINT_BSTRING,
@@ -270,6 +277,7 @@ struct print_arg {
 		struct print_arg_typecast	typecast;
 		struct print_arg_flags		flags;
 		struct print_arg_symbol		symbol;
+		struct print_arg_hex		hex;
 		struct print_arg_func		func;
 		struct print_arg_string		string;
 		struct print_arg_op		op;
@@ -300,6 +308,8 @@ enum {
 	EVENT_FL_ISBPRINT	= 0x04,
 	EVENT_FL_ISFUNCENT	= 0x10,
 	EVENT_FL_ISFUNCRET	= 0x20,
+	EVENT_FL_NOHANDLE	= 0x40,
+	EVENT_FL_PRINTRAW	= 0x80,
 
 	EVENT_FL_FAILED		= 0x80000000
 };
@@ -338,6 +348,35 @@ enum pevent_flag {
 	PEVENT_NSEC_OUTPUT		= 1,	/* output in NSECS */
 };
 
+#define PEVENT_ERRORS 							      \
+	_PE(MEM_ALLOC_FAILED,	"failed to allocate memory"),		      \
+	_PE(PARSE_EVENT_FAILED,	"failed to parse event"),		      \
+	_PE(READ_ID_FAILED,	"failed to read event id"),		      \
+	_PE(READ_FORMAT_FAILED,	"failed to read event format"),		      \
+	_PE(READ_PRINT_FAILED,	"failed to read event print fmt"), 	      \
+	_PE(OLD_FTRACE_ARG_FAILED,"failed to allocate field name for ftrace"),\
+	_PE(INVALID_ARG_TYPE,	"invalid argument type")
+
+#undef _PE
+#define _PE(__code, __str) PEVENT_ERRNO__ ## __code
+enum pevent_errno {
+	PEVENT_ERRNO__SUCCESS			= 0,
+
+	/*
+	 * Choose an arbitrary negative big number not to clash with standard
+	 * errno since SUS requires the errno has distinct positive values.
+	 * See 'Issue 6' in the link below.
+	 *
+	 * http://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
+	 */
+	__PEVENT_ERRNO__START			= -100000,
+
+	PEVENT_ERRORS,
+
+	__PEVENT_ERRNO__END,
+};
+#undef _PE
+
 struct cmdline;
 struct cmdline_list;
 struct func_map;
@@ -364,6 +403,7 @@ struct pevent {
 
 	int cpus;
 	int long_size;
+	int page_size;
 
 	struct cmdline *cmdlines;
 	struct cmdline_list *cmdlist;
@@ -413,6 +453,8 @@ struct pevent {
 
 	/* cache */
 	struct event_format *last_event;
+
+	char *trace_clock;
 };
 
 static inline void pevent_set_flag(struct pevent *pevent, int flag)
@@ -490,20 +532,24 @@ enum trace_flag_type {
 };
 
 int pevent_register_comm(struct pevent *pevent, const char *comm, int pid);
+void pevent_register_trace_clock(struct pevent *pevent, char *trace_clock);
 int pevent_register_function(struct pevent *pevent, char *name,
 			     unsigned long long addr, char *mod);
-int pevent_register_print_string(struct pevent *pevent, char *fmt,
+int pevent_register_print_string(struct pevent *pevent, const char *fmt,
 				 unsigned long long addr);
 int pevent_pid_is_registered(struct pevent *pevent, int pid);
 
 void pevent_print_event(struct pevent *pevent, struct trace_seq *s,
-			struct pevent_record *record);
+			struct pevent_record *record, bool use_trace_clock);
 
 int pevent_parse_header_page(struct pevent *pevent, char *buf, unsigned long size,
 			     int long_size);
 
-int pevent_parse_event(struct pevent *pevent, const char *buf,
-		       unsigned long size, const char *sys);
+enum pevent_errno pevent_parse_event(struct pevent *pevent, const char *buf,
+				     unsigned long size, const char *sys);
+enum pevent_errno pevent_parse_format(struct event_format **eventp, const char *buf,
+				      unsigned long size, const char *sys);
+void pevent_free_format(struct event_format *event);
 
 void *pevent_get_field_raw(struct trace_seq *s, struct event_format *event,
 			   const char *name, struct pevent_record *record,
@@ -523,7 +569,12 @@ int pevent_print_num_field(struct trace_seq *s, const char *fmt,
 			   struct event_format *event, const char *name,
 			   struct pevent_record *record, int err);
 
-int pevent_register_event_handler(struct pevent *pevent, int id, char *sys_name, char *event_name,
+int pevent_print_func_field(struct trace_seq *s, const char *fmt,
+			   struct event_format *event, const char *name,
+			   struct pevent_record *record, int err);
+
+int pevent_register_event_handler(struct pevent *pevent, int id,
+				  const char *sys_name, const char *event_name,
 				  pevent_event_handler_func func, void *context);
 int pevent_register_print_function(struct pevent *pevent,
 				   pevent_func_handler func,
@@ -554,6 +605,8 @@ int pevent_data_pid(struct pevent *pevent, struct pevent_record *rec);
 const char *pevent_data_comm_from_pid(struct pevent *pevent, int pid);
 void pevent_event_info(struct trace_seq *s, struct event_format *event,
 		       struct pevent_record *record);
+int pevent_strerror(struct pevent *pevent, enum pevent_errno errnum,
+		    char *buf, size_t buflen);
 
 struct event_format **pevent_list_events(struct pevent *pevent, enum event_sort_type);
 struct format_field **pevent_event_common_fields(struct event_format *event);
@@ -577,6 +630,16 @@ static inline int pevent_get_long_size(struct pevent *pevent)
 static inline void pevent_set_long_size(struct pevent *pevent, int long_size)
 {
 	pevent->long_size = long_size;
+}
+
+static inline int pevent_get_page_size(struct pevent *pevent)
+{
+	return pevent->page_size;
+}
+
+static inline void pevent_set_page_size(struct pevent *pevent, int _page_size)
+{
+	pevent->page_size = _page_size;
 }
 
 static inline int pevent_is_file_bigendian(struct pevent *pevent)

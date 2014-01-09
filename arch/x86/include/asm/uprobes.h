@@ -35,23 +35,21 @@ typedef u8 uprobe_opcode_t;
 
 struct arch_uprobe {
 	u16				fixups;
-	u8				insn[MAX_UINSN_BYTES];
+	union {
+		u8			insn[MAX_UINSN_BYTES];
+		u8			ixol[MAX_UINSN_BYTES];
+	};
 #ifdef CONFIG_X86_64
 	unsigned long			rip_rela_target_address;
 #endif
 };
 
 struct arch_uprobe_task {
-	unsigned long			saved_trap_nr;
 #ifdef CONFIG_X86_64
 	unsigned long			saved_scratch_register;
 #endif
+	unsigned int			saved_trap_nr;
+	unsigned int			saved_tf;
 };
 
-extern int  arch_uprobe_analyze_insn(struct arch_uprobe *aup, struct mm_struct *mm);
-extern int  arch_uprobe_pre_xol(struct arch_uprobe *aup, struct pt_regs *regs);
-extern int  arch_uprobe_post_xol(struct arch_uprobe *aup, struct pt_regs *regs);
-extern bool arch_uprobe_xol_was_trapped(struct task_struct *tsk);
-extern int  arch_uprobe_exception_notify(struct notifier_block *self, unsigned long val, void *data);
-extern void arch_uprobe_abort_xol(struct arch_uprobe *aup, struct pt_regs *regs);
 #endif	/* _ASM_UPROBES_H */

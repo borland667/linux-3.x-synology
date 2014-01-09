@@ -17,7 +17,10 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/usb/musb.h>
-#include <asm/bfin6xx_spi.h>
+#include <linux/pinctrl/machine.h>
+#include <linux/pinctrl/pinconf-generic.h>
+#include <linux/platform_data/pinctrl-adi2.h>
+#include <asm/bfin_spi3.h>
 #include <asm/dma.h>
 #include <asm/gpio.h>
 #include <asm/nand.h>
@@ -104,19 +107,32 @@ static struct platform_device bfin_rotary_device = {
 
 #if defined(CONFIG_STMMAC_ETH) || defined(CONFIG_STMMAC_ETH_MODULE)
 #include <linux/stmmac.h>
-
-static unsigned short pins[] = P_RMII0;
+#include <linux/phy.h>
 
 static struct stmmac_mdio_bus_data phy_private_data = {
-	.bus_id = 0,
 	.phy_mask = 1,
 };
 
+static struct stmmac_dma_cfg eth_dma_cfg = {
+	.pbl	= 2,
+};
+
+int stmmac_ptp_clk_init(struct platform_device *pdev)
+{
+	bfin_write32(PADS0_EMAC_PTP_CLKSEL, 0);
+	return 0;
+}
+
 static struct plat_stmmacenet_data eth_private_data = {
+	.has_gmac = 1,
 	.bus_id   = 0,
 	.enh_desc = 1,
 	.phy_addr = 1,
 	.mdio_bus_data = &phy_private_data,
+	.dma_cfg  = &eth_dma_cfg,
+	.force_thresh_dma_mode = 1,
+	.interface = PHY_INTERFACE_MODE_RMII,
+	.init = stmmac_ptp_clk_init,
 };
 
 static struct platform_device bfin_eth_device = {
@@ -197,6 +213,18 @@ static struct resource bfin_uart0_resources[] = {
 		.end = UART0_RXDIV+4,
 		.flags = IORESOURCE_MEM,
 	},
+#ifdef CONFIG_EARLY_PRINTK
+	{
+		.start = PORTD_FER,
+		.end = PORTD_FER+2,
+		.flags = IORESOURCE_REG,
+	},
+	{
+		.start = PORTD_MUX,
+		.end = PORTD_MUX+3,
+		.flags = IORESOURCE_REG,
+	},
+#endif
 	{
 		.start = IRQ_UART0_TX,
 		.end = IRQ_UART0_TX,
@@ -261,6 +289,13 @@ static struct resource bfin_uart1_resources[] = {
 		.end = UART1_RXDIV+4,
 		.flags = IORESOURCE_MEM,
 	},
+#ifdef CONFIG_EARLY_PRINTK
+	{
+		.start = PORTG_FER_SET,
+		.end = PORTG_FER_SET+2,
+		.flags = IORESOURCE_REG,
+	},
+#endif
 	{
 		.start = IRQ_UART1_TX,
 		.end = IRQ_UART1_TX,
@@ -659,17 +694,12 @@ static struct mtd_partition ezkit_partitions[] = {
 	},
 };
 
-int bf609_nor_flash_init(struct platform_device *dev)
+int bf609_nor_flash_init(struct platform_device *pdev)
 {
 #define CONFIG_SMC_GCTL_VAL     0x00000010
-	const unsigned short pins[] = {
-		P_A3, P_A4, P_A5, P_A6, P_A7, P_A8, P_A9, P_A10, P_A11, P_A12,
-		P_A13, P_A14, P_A15, P_A16, P_A17, P_A18, P_A19, P_A20, P_A21,
-		P_A22, P_A23, P_A24, P_A25, P_NORCK, 0,
-	};
 
-	peripheral_request_list(pins, "smc0");
-
+	if (!devm_pinctrl_get_select_default(&pdev->dev))
+		return -EBUSY;
 	bfin_write32(SMC_GCTL, CONFIG_SMC_GCTL_VAL);
 	bfin_write32(SMC_B0CTL, 0x01002011);
 	bfin_write32(SMC_B0TIM, 0x08170977);
@@ -677,11 +707,21 @@ int bf609_nor_flash_init(struct platform_device *dev)
 	return 0;
 }
 
+void bf609_nor_flash_exit(struct platform_device *pdev)
+{
+	devm_pinctrl_put(pdev->dev.pins->p);
+	bfin_write32(SMC_GCTL, 0);
+}
+
 static struct physmap_flash_data ezkit_flash_data = {
 	.width      = 2,
 	.parts      = ezkit_partitions,
-	.init 	    = bf609_nor_flash_init,
+	.init       = bf609_nor_flash_init,
+	.exit       = bf609_nor_flash_exit,
 	.nr_parts   = ARRAY_SIZE(ezkit_partitions),
+#ifdef CONFIG_ROMKERNEL
+	.probe_type = "map_rom",
+#endif
 };
 
 static struct resource ezkit_flash_resource = {
@@ -728,18 +768,18 @@ static struct flash_platform_data bfin_spi_flash_data = {
 	.type = "w25q32",
 };
 
-static struct bfin6xx_spi_chip spi_flash_chip_info = {
+static struct bfin_spi3_chip spi_flash_chip_info = {
 	.enable_dma = true,         /* use dma transfer with this chip*/
 };
 #endif
 
 #if defined(CONFIG_SPI_SPIDEV) || defined(CONFIG_SPI_SPIDEV_MODULE)
-static struct bfin6xx_spi_chip spidev_chip_info = {
+static struct bfin_spi3_chip spidev_chip_info = {
 	.enable_dma = true,
 };
 #endif
 
-#if defined(CONFIG_SND_BF6XX_I2S) || defined(CONFIG_SND_BF6XX_I2S_MODULE)
+#if defined(CONFIG_SND_BF5XX_I2S) || defined(CONFIG_SND_BF5XX_I2S_MODULE)
 static struct platform_device bfin_i2s_pcm = {
 	.name = "bfin-i2s-pcm-audio",
 	.id = -1,
@@ -801,6 +841,21 @@ static struct platform_device bfin_i2s = {
 };
 #endif
 
+#if defined(CONFIG_SND_BF5XX_SOC_AD1836) \
+	        || defined(CONFIG_SND_BF5XX_SOC_AD1836_MODULE)
+static const char * const ad1836_link[] = {
+	"bfin-i2s.0",
+	"spi0.76",
+};
+static struct platform_device bfin_ad1836_machine = {
+	.name = "bfin-snd-ad1836",
+	.id = -1,
+	.dev = {
+		.platform_data = (void *)ad1836_link,
+	},
+};
+#endif
+
 #if defined(CONFIG_SND_SOC_BFIN_EVAL_ADAU1X61) || \
 	defined(CONFIG_SND_SOC_BFIN_EVAL_ADAU1X61_MODULE)
 static struct platform_device adau1761_device = {
@@ -825,6 +880,12 @@ static struct adau1761_platform_data adau1761_info = {
 static const unsigned short ppi_req[] = {
 	P_PPI0_D0, P_PPI0_D1, P_PPI0_D2, P_PPI0_D3,
 	P_PPI0_D4, P_PPI0_D5, P_PPI0_D6, P_PPI0_D7,
+	P_PPI0_D8, P_PPI0_D9, P_PPI0_D10, P_PPI0_D11,
+	P_PPI0_D12, P_PPI0_D13, P_PPI0_D14, P_PPI0_D15,
+#if !defined(CONFIG_VIDEO_VS6624) && !defined(CONFIG_VIDEO_VS6624_MODULE)
+	P_PPI0_D16, P_PPI0_D17, P_PPI0_D18, P_PPI0_D19,
+	P_PPI0_D20, P_PPI0_D21, P_PPI0_D22, P_PPI0_D23,
+#endif
 	P_PPI0_CLK, P_PPI0_FS1, P_PPI0_FS2,
 	0,
 };
@@ -855,7 +916,7 @@ static struct bcap_route vs6624_routes[] = {
 	},
 };
 
-static const unsigned vs6624_ce_pin = GPIO_PD1;
+static const unsigned vs6624_ce_pin = GPIO_PE4;
 
 static struct bfin_capture_config bfin_capture_data = {
 	.card_name = "BF609",
@@ -871,7 +932,128 @@ static struct bfin_capture_config bfin_capture_data = {
 	.ppi_info = &ppi_info,
 	.ppi_control = (PACK_EN | DLEN_8 | EPPI_CTL_FS1HI_FS2HI
 			| EPPI_CTL_POLC3 | EPPI_CTL_SYNC2 | EPPI_CTL_NON656),
-	.blank_clocks = 8,
+	.blank_pixels = 4,
+};
+#endif
+
+#if defined(CONFIG_VIDEO_ADV7842) \
+	|| defined(CONFIG_VIDEO_ADV7842_MODULE)
+#include <media/adv7842.h>
+
+static struct v4l2_input adv7842_inputs[] = {
+	{
+		.index = 0,
+		.name = "Composite",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.std = V4L2_STD_ALL,
+		.capabilities = V4L2_IN_CAP_STD,
+	},
+	{
+		.index = 1,
+		.name = "S-Video",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.std = V4L2_STD_ALL,
+		.capabilities = V4L2_IN_CAP_STD,
+	},
+	{
+		.index = 2,
+		.name = "Component",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.capabilities = V4L2_IN_CAP_DV_TIMINGS,
+	},
+	{
+		.index = 3,
+		.name = "VGA",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.capabilities = V4L2_IN_CAP_DV_TIMINGS,
+	},
+	{
+		.index = 4,
+		.name = "HDMI",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.capabilities = V4L2_IN_CAP_DV_TIMINGS,
+	},
+};
+
+static struct bcap_route adv7842_routes[] = {
+	{
+		.input = 3,
+		.output = 0,
+		.ppi_control = (PACK_EN | DLEN_8 | EPPI_CTL_FLDSEL
+				| EPPI_CTL_ACTIVE656),
+	},
+	{
+		.input = 4,
+		.output = 0,
+	},
+	{
+		.input = 2,
+		.output = 0,
+	},
+	{
+		.input = 1,
+		.output = 0,
+	},
+	{
+		.input = 0,
+		.output = 1,
+		.ppi_control = (EPPI_CTL_SPLTWRD | PACK_EN | DLEN_16
+				| EPPI_CTL_FS1LO_FS2LO | EPPI_CTL_POLC2
+				| EPPI_CTL_SYNC2 | EPPI_CTL_NON656),
+	},
+};
+
+static struct adv7842_output_format adv7842_opf[] = {
+	{
+		.op_ch_sel = ADV7842_OP_CH_SEL_BRG,
+		.op_format_sel = ADV7842_OP_FORMAT_SEL_SDR_ITU656_8,
+		.op_656_range = 1,
+		.blank_data = 1,
+		.insert_av_codes = 1,
+	},
+	{
+		.op_ch_sel = ADV7842_OP_CH_SEL_RGB,
+		.op_format_sel = ADV7842_OP_FORMAT_SEL_SDR_ITU656_16,
+		.op_656_range = 1,
+		.blank_data = 1,
+	},
+};
+
+static struct adv7842_platform_data adv7842_data = {
+	.opf = adv7842_opf,
+	.num_opf = ARRAY_SIZE(adv7842_opf),
+	.ain_sel = ADV7842_AIN10_11_12_NC_SYNC_4_1,
+	.prim_mode = ADV7842_PRIM_MODE_SDP,
+	.vid_std_select = ADV7842_SDP_VID_STD_CVBS_SD_4x1,
+	.inp_color_space = ADV7842_INP_COLOR_SPACE_AUTO,
+	.i2c_sdp_io = 0x40,
+	.i2c_sdp = 0x41,
+	.i2c_cp = 0x42,
+	.i2c_vdp = 0x43,
+	.i2c_afe = 0x44,
+	.i2c_hdmi = 0x45,
+	.i2c_repeater = 0x46,
+	.i2c_edid = 0x47,
+	.i2c_infoframe = 0x48,
+	.i2c_cec = 0x49,
+	.i2c_avlink = 0x4a,
+	.i2c_ex = 0x26,
+};
+
+static struct bfin_capture_config bfin_capture_data = {
+	.card_name = "BF609",
+	.inputs = adv7842_inputs,
+	.num_inputs = ARRAY_SIZE(adv7842_inputs),
+	.routes = adv7842_routes,
+	.i2c_adapter_id = 0,
+	.board_info = {
+		.type = "adv7842",
+		.addr = 0x20,
+		.platform_data = (void *)&adv7842_data,
+	},
+	.ppi_info = &ppi_info,
+	.ppi_control = (PACK_EN | DLEN_8 | EPPI_CTL_FLDSEL
+			| EPPI_CTL_ACTIVE656),
 };
 #endif
 
@@ -879,6 +1061,155 @@ static struct platform_device bfin_capture_device = {
 	.name = "bfin_capture",
 	.dev = {
 		.platform_data = &bfin_capture_data,
+	},
+};
+#endif
+
+#if defined(CONFIG_VIDEO_BLACKFIN_DISPLAY) \
+	|| defined(CONFIG_VIDEO_BLACKFIN_DISPLAY_MODULE)
+#include <linux/videodev2.h>
+#include <media/blackfin/bfin_display.h>
+#include <media/blackfin/ppi.h>
+
+static const unsigned short ppi_req_disp[] = {
+	P_PPI0_D0, P_PPI0_D1, P_PPI0_D2, P_PPI0_D3,
+	P_PPI0_D4, P_PPI0_D5, P_PPI0_D6, P_PPI0_D7,
+	P_PPI0_D8, P_PPI0_D9, P_PPI0_D10, P_PPI0_D11,
+	P_PPI0_D12, P_PPI0_D13, P_PPI0_D14, P_PPI0_D15,
+	P_PPI0_CLK, P_PPI0_FS1, P_PPI0_FS2,
+	0,
+};
+
+static const struct ppi_info ppi_info = {
+	.type = PPI_TYPE_EPPI3,
+	.dma_ch = CH_EPPI0_CH0,
+	.irq_err = IRQ_EPPI0_STAT,
+	.base = (void __iomem *)EPPI0_STAT,
+	.pin_req = ppi_req_disp,
+};
+
+#if defined(CONFIG_VIDEO_ADV7511) \
+	|| defined(CONFIG_VIDEO_ADV7511_MODULE)
+#include <media/adv7511.h>
+
+static struct v4l2_output adv7511_outputs[] = {
+	{
+		.index = 0,
+		.name = "HDMI",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.capabilities = V4L2_OUT_CAP_DV_TIMINGS,
+	},
+};
+
+static struct disp_route adv7511_routes[] = {
+	{
+		.output = 0,
+	},
+};
+
+static struct adv7511_platform_data adv7511_data = {
+	.edid_addr = 0x7e,
+	.i2c_ex = 0x25,
+};
+
+static struct bfin_display_config bfin_display_data = {
+	.card_name = "BF609",
+	.outputs = adv7511_outputs,
+	.num_outputs = ARRAY_SIZE(adv7511_outputs),
+	.routes = adv7511_routes,
+	.i2c_adapter_id = 0,
+	.board_info = {
+		.type = "adv7511",
+		.addr = 0x39,
+		.platform_data = (void *)&adv7511_data,
+	},
+	.ppi_info = &ppi_info,
+	.ppi_control = (EPPI_CTL_SPLTWRD | PACK_EN | DLEN_16
+			| EPPI_CTL_FS1LO_FS2LO | EPPI_CTL_POLC3
+			| EPPI_CTL_IFSGEN | EPPI_CTL_SYNC2
+			| EPPI_CTL_NON656 | EPPI_CTL_DIR),
+};
+#endif
+
+#if IS_ENABLED(CONFIG_VIDEO_ADV7343)
+#include <media/adv7343.h>
+
+static struct v4l2_output adv7343_outputs[] = {
+	{
+		.index = 0,
+		.name = "Composite",
+		.type = V4L2_OUTPUT_TYPE_ANALOG,
+		.std = V4L2_STD_ALL,
+		.capabilities = V4L2_OUT_CAP_STD,
+	},
+	{
+		.index = 1,
+		.name = "S-Video",
+		.type = V4L2_OUTPUT_TYPE_ANALOG,
+		.std = V4L2_STD_ALL,
+		.capabilities = V4L2_OUT_CAP_STD,
+	},
+	{
+		.index = 2,
+		.name = "Component",
+		.type = V4L2_OUTPUT_TYPE_ANALOG,
+		.std = V4L2_STD_ALL,
+		.capabilities = V4L2_OUT_CAP_STD,
+	},
+
+};
+
+static struct disp_route adv7343_routes[] = {
+	{
+		.output = ADV7343_COMPOSITE_ID,
+	},
+	{
+		.output = ADV7343_SVIDEO_ID,
+	},
+	{
+		.output = ADV7343_COMPONENT_ID,
+	},
+};
+
+static struct adv7343_platform_data adv7343_data = {
+	.mode_config = {
+		.sleep_mode = false,
+		.pll_control = false,
+		.dac_1 = true,
+		.dac_2 = true,
+		.dac_3 = true,
+		.dac_4 = true,
+		.dac_5 = true,
+		.dac_6 = true,
+	},
+	.sd_config = {
+		.sd_dac_out1 = false,
+		.sd_dac_out2 = false,
+	},
+};
+
+static struct bfin_display_config bfin_display_data = {
+	.card_name = "BF609",
+	.outputs = adv7343_outputs,
+	.num_outputs = ARRAY_SIZE(adv7343_outputs),
+	.routes = adv7343_routes,
+	.i2c_adapter_id = 0,
+	.board_info = {
+		.type = "adv7343",
+		.addr = 0x2b,
+		.platform_data = (void *)&adv7343_data,
+	},
+	.ppi_info = &ppi_info_disp,
+	.ppi_control = (PACK_EN | DLEN_8 | EPPI_CTL_FS1LO_FS2LO
+			| EPPI_CTL_POLC3 | EPPI_CTL_BLANKGEN | EPPI_CTL_SYNC2
+			| EPPI_CTL_NON656 | EPPI_CTL_DIR),
+};
+#endif
+
+static struct platform_device bfin_display_device = {
+	.name = "bfin_display",
+	.dev = {
+		.platform_data = &bfin_display_data,
 	},
 };
 #endif
@@ -947,6 +1278,39 @@ static struct platform_device bfin_crc1_device = {
 };
 #endif
 
+#if defined(CONFIG_CRYPTO_DEV_BFIN_CRC)
+#define BFIN_CRYPTO_CRC_NAME		"bfin-hmac-crc"
+#define BFIN_CRYPTO_CRC_POLY_DATA	0x5c5c5c5c
+
+static struct resource bfin_crypto_crc_resources[] = {
+	{
+		.start = REG_CRC0_CTL,
+		.end = REG_CRC0_REVID+4,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_CRC0_DCNTEXP,
+		.end = IRQ_CRC0_DCNTEXP,
+		.flags = IORESOURCE_IRQ,
+	},
+	{
+		.start = CH_MEM_STREAM0_SRC_CRC0,
+		.end = CH_MEM_STREAM0_SRC_CRC0,
+		.flags = IORESOURCE_DMA,
+	},
+};
+
+static struct platform_device bfin_crypto_crc_device = {
+	.name = BFIN_CRYPTO_CRC_NAME,
+	.id = 0,
+	.num_resources = ARRAY_SIZE(bfin_crypto_crc_resources),
+	.resource = bfin_crypto_crc_resources,
+	.dev = {
+		.platform_data = (void *)BFIN_CRYPTO_CRC_POLY_DATA,
+	},
+};
+#endif
+
 #if defined(CONFIG_TOUCHSCREEN_AD7877) || defined(CONFIG_TOUCHSCREEN_AD7877_MODULE)
 static const struct ad7877_platform_data bfin_ad7877_ts_info = {
 	.model			= 7877,
@@ -963,6 +1327,378 @@ static const struct ad7877_platform_data bfin_ad7877_ts_info = {
 };
 #endif
 
+#ifdef CONFIG_PINCTRL_ADI2
+
+# define ADI_PINT_DEVNAME "adi-gpio-pint"
+# define ADI_GPIO_DEVNAME "adi-gpio"
+# define ADI_PINCTRL_DEVNAME "pinctrl-adi2"
+
+static struct platform_device bfin_pinctrl_device = {
+	.name = ADI_PINCTRL_DEVNAME,
+	.id = 0,
+};
+
+static struct resource bfin_pint0_resources[] = {
+	{
+		.start = PINT0_MASK_SET,
+		.end = PINT0_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT0,
+		.end = IRQ_PINT0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint0_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 0,
+	.num_resources = ARRAY_SIZE(bfin_pint0_resources),
+	.resource = bfin_pint0_resources,
+};
+
+static struct resource bfin_pint1_resources[] = {
+	{
+		.start = PINT1_MASK_SET,
+		.end = PINT1_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT1,
+		.end = IRQ_PINT1,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint1_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 1,
+	.num_resources = ARRAY_SIZE(bfin_pint1_resources),
+	.resource = bfin_pint1_resources,
+};
+
+static struct resource bfin_pint2_resources[] = {
+	{
+		.start = PINT2_MASK_SET,
+		.end = PINT2_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT2,
+		.end = IRQ_PINT2,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint2_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 2,
+	.num_resources = ARRAY_SIZE(bfin_pint2_resources),
+	.resource = bfin_pint2_resources,
+};
+
+static struct resource bfin_pint3_resources[] = {
+	{
+		.start = PINT3_MASK_SET,
+		.end = PINT3_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT3,
+		.end = IRQ_PINT3,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint3_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 3,
+	.num_resources = ARRAY_SIZE(bfin_pint3_resources),
+	.resource = bfin_pint3_resources,
+};
+
+static struct resource bfin_pint4_resources[] = {
+	{
+		.start = PINT4_MASK_SET,
+		.end = PINT4_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT4,
+		.end = IRQ_PINT4,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint4_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 4,
+	.num_resources = ARRAY_SIZE(bfin_pint4_resources),
+	.resource = bfin_pint4_resources,
+};
+
+static struct resource bfin_pint5_resources[] = {
+	{
+		.start = PINT5_MASK_SET,
+		.end = PINT5_LATCH + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PINT5,
+		.end = IRQ_PINT5,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device bfin_pint5_device = {
+	.name = ADI_PINT_DEVNAME,
+	.id = 5,
+	.num_resources = ARRAY_SIZE(bfin_pint5_resources),
+	.resource = bfin_pint5_resources,
+};
+
+static struct resource bfin_gpa_resources[] = {
+	{
+		.start = PORTA_FER,
+		.end = PORTA_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{	/* optional */
+		.start = IRQ_PA0,
+		.end = IRQ_PA0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpa_pdata = {
+	.port_pin_base	= GPIO_PA0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 0,		/* PINT0 */
+	.pint_assign	= true,		/* PINT upper 16 bit */
+	.pint_map	= 0,		/* mapping mask in PINT */
+};
+
+static struct platform_device bfin_gpa_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 0,
+	.num_resources = ARRAY_SIZE(bfin_gpa_resources),
+	.resource = bfin_gpa_resources,
+	.dev = {
+		.platform_data = &bfin_gpa_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpb_resources[] = {
+	{
+		.start = PORTB_FER,
+		.end = PORTB_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PB0,
+		.end = IRQ_PB0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpb_pdata = {
+	.port_pin_base	= GPIO_PB0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 0,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpb_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 1,
+	.num_resources = ARRAY_SIZE(bfin_gpb_resources),
+	.resource = bfin_gpb_resources,
+	.dev = {
+		.platform_data = &bfin_gpb_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpc_resources[] = {
+	{
+		.start = PORTC_FER,
+		.end = PORTC_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PC0,
+		.end = IRQ_PC0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpc_pdata = {
+	.port_pin_base	= GPIO_PC0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 1,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpc_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 2,
+	.num_resources = ARRAY_SIZE(bfin_gpc_resources),
+	.resource = bfin_gpc_resources,
+	.dev = {
+		.platform_data = &bfin_gpc_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpd_resources[] = {
+	{
+		.start = PORTD_FER,
+		.end = PORTD_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PD0,
+		.end = IRQ_PD0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpd_pdata = {
+	.port_pin_base	= GPIO_PD0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 2,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpd_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 3,
+	.num_resources = ARRAY_SIZE(bfin_gpd_resources),
+	.resource = bfin_gpd_resources,
+	.dev = {
+		.platform_data = &bfin_gpd_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpe_resources[] = {
+	{
+		.start = PORTE_FER,
+		.end = PORTE_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PE0,
+		.end = IRQ_PE0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpe_pdata = {
+	.port_pin_base	= GPIO_PE0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 3,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpe_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 4,
+	.num_resources = ARRAY_SIZE(bfin_gpe_resources),
+	.resource = bfin_gpe_resources,
+	.dev = {
+		.platform_data = &bfin_gpe_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpf_resources[] = {
+	{
+		.start = PORTF_FER,
+		.end = PORTF_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PF0,
+		.end = IRQ_PF0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpf_pdata = {
+	.port_pin_base	= GPIO_PF0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 4,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpf_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 5,
+	.num_resources = ARRAY_SIZE(bfin_gpf_resources),
+	.resource = bfin_gpf_resources,
+	.dev = {
+		.platform_data = &bfin_gpf_pdata, /* Passed to driver */
+	},
+};
+
+static struct resource bfin_gpg_resources[] = {
+	{
+		.start = PORTG_FER,
+		.end = PORTG_MUX + 3,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = IRQ_PG0,
+		.end = IRQ_PG0,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct adi_pinctrl_gpio_platform_data bfin_gpg_pdata = {
+	.port_pin_base	= GPIO_PG0,
+	.port_width	= GPIO_BANKSIZE,
+	.pint_id	= 5,
+	.pint_assign	= false,
+	.pint_map	= 1,
+};
+
+static struct platform_device bfin_gpg_device = {
+	.name = ADI_GPIO_DEVNAME,
+	.id = 6,
+	.num_resources = ARRAY_SIZE(bfin_gpg_resources),
+	.resource = bfin_gpg_resources,
+	.dev = {
+		.platform_data = &bfin_gpg_pdata, /* Passed to driver */
+	},
+};
+
+#endif
+
+#if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
+#include <linux/input.h>
+#include <linux/gpio_keys.h>
+
+static struct gpio_keys_button bfin_gpio_keys_table[] = {
+	{BTN_0, GPIO_PB10, 1, "gpio-keys: BTN0"},
+	{BTN_1, GPIO_PE1, 1, "gpio-keys: BTN1"},
+};
+
+static struct gpio_keys_platform_data bfin_gpio_keys_data = {
+	.buttons        = bfin_gpio_keys_table,
+	.nbuttons       = ARRAY_SIZE(bfin_gpio_keys_table),
+};
+
+static struct platform_device bfin_device_gpiokeys = {
+	.name      = "gpio-keys",
+	.dev = {
+		.platform_data = &bfin_gpio_keys_data,
+	},
+};
+#endif
+
 static struct spi_board_info bfin_spi_board_info[] __initdata = {
 #if defined(CONFIG_MTD_M25P80) \
 	|| defined(CONFIG_MTD_M25P80_MODULE)
@@ -971,7 +1707,7 @@ static struct spi_board_info bfin_spi_board_info[] __initdata = {
 		.modalias = "m25p80", /* Name of spi_driver for this device */
 		.max_speed_hz = 25000000,     /* max spi clock (SCK) speed in HZ */
 		.bus_num = 0, /* Framework bus number */
-		.chip_select = 1, /* SPI_SSEL1*/
+		.chip_select = MAX_CTRL_CS + GPIO_PD11, /* SPI_SSEL1*/
 		.platform_data = &bfin_spi_flash_data,
 		.controller_data = &spi_flash_chip_info,
 		.mode = SPI_MODE_3,
@@ -981,10 +1717,10 @@ static struct spi_board_info bfin_spi_board_info[] __initdata = {
 	{
 		.modalias		= "ad7877",
 		.platform_data		= &bfin_ad7877_ts_info,
-		.irq			= IRQ_PB4,	/* old boards (<=Rev 1.3) use IRQ_PJ11 */
+		.irq			= IRQ_PD9,
 		.max_speed_hz		= 12500000,     /* max spi clock (SCK) speed in HZ */
 		.bus_num		= 0,
-		.chip_select  		= 2,
+		.chip_select		= MAX_CTRL_CS + GPIO_PC15, /* SPI_SSEL4 */
 	},
 #endif
 #if defined(CONFIG_SPI_SPIDEV) || defined(CONFIG_SPI_SPIDEV_MODULE)
@@ -992,7 +1728,7 @@ static struct spi_board_info bfin_spi_board_info[] __initdata = {
 		.modalias = "spidev",
 		.max_speed_hz = 3125000,     /* max spi clock (SCK) speed in HZ */
 		.bus_num = 0,
-		.chip_select = 1,
+		.chip_select = MAX_CTRL_CS + GPIO_PD11, /* SPI_SSEL1*/
 		.controller_data = &spidev_chip_info,
 	},
 #endif
@@ -1008,7 +1744,7 @@ static struct spi_board_info bfin_spi_board_info[] __initdata = {
 	},
 #endif
 };
-#if defined(CONFIG_SPI_BFIN6XX) || defined(CONFIG_SPI_BFIN6XX_MODULE)
+#if IS_ENABLED(CONFIG_SPI_BFIN_V3)
 /* SPI (0) */
 static struct resource bfin_spi0_resource[] = {
 	{
@@ -1049,13 +1785,13 @@ static struct resource bfin_spi1_resource[] = {
 };
 
 /* SPI controller data */
-static struct bfin6xx_spi_master bf60x_spi_master_info0 = {
-	.num_chipselect = 4,
+static struct bfin_spi3_master bf60x_spi_master_info0 = {
+	.num_chipselect = MAX_CTRL_CS + MAX_BLACKFIN_GPIOS,
 	.pin_req = {P_SPI0_SCK, P_SPI0_MISO, P_SPI0_MOSI, 0},
 };
 
 static struct platform_device bf60x_spi_master0 = {
-	.name = "bfin-spi",
+	.name = "bfin-spi3",
 	.id = 0, /* Bus number */
 	.num_resources = ARRAY_SIZE(bfin_spi0_resource),
 	.resource = bfin_spi0_resource,
@@ -1064,13 +1800,13 @@ static struct platform_device bf60x_spi_master0 = {
 	},
 };
 
-static struct bfin6xx_spi_master bf60x_spi_master_info1 = {
-	.num_chipselect = 4,
+static struct bfin_spi3_master bf60x_spi_master_info1 = {
+	.num_chipselect = MAX_CTRL_CS + MAX_BLACKFIN_GPIOS,
 	.pin_req = {P_SPI1_SCK, P_SPI1_MISO, P_SPI1_MOSI, 0},
 };
 
 static struct platform_device bf60x_spi_master1 = {
-	.name = "bfin-spi",
+	.name = "bfin-spi3",
 	.id = 1, /* Bus number */
 	.num_resources = ARRAY_SIZE(bfin_spi1_resource),
 	.resource = bfin_spi1_resource,
@@ -1146,6 +1882,11 @@ static struct i2c_board_info __initdata bfin_i2c_board_info0[] = {
 		.platform_data = (void *)&adau1761_info
 	},
 #endif
+#if defined(CONFIG_SND_SOC_SSM2602) || defined(CONFIG_SND_SOC_SSM2602_MODULE)
+	{
+		I2C_BOARD_INFO("ssm2602", 0x1b),
+	},
+#endif
 };
 
 static struct i2c_board_info __initdata bfin_i2c_board_info1[] = {
@@ -1182,6 +1923,22 @@ static struct platform_device bfin_dpmc = {
 static struct platform_device *ezkit_devices[] __initdata = {
 
 	&bfin_dpmc,
+#if defined(CONFIG_PINCTRL_ADI2)
+	&bfin_pinctrl_device,
+	&bfin_pint0_device,
+	&bfin_pint1_device,
+	&bfin_pint2_device,
+	&bfin_pint3_device,
+	&bfin_pint4_device,
+	&bfin_pint5_device,
+	&bfin_gpa_device,
+	&bfin_gpb_device,
+	&bfin_gpc_device,
+	&bfin_gpd_device,
+	&bfin_gpe_device,
+	&bfin_gpf_device,
+	&bfin_gpg_device,
+#endif
 
 #if defined(CONFIG_RTC_DRV_BFIN) || defined(CONFIG_RTC_DRV_BFIN_MODULE)
 	&rtc_device,
@@ -1241,7 +1998,7 @@ static struct platform_device *ezkit_devices[] __initdata = {
 	&bfin_sdh_device,
 #endif
 
-#if defined(CONFIG_SPI_BFIN6XX) || defined(CONFIG_SPI_BFIN6XX_MODULE)
+#if IS_ENABLED(CONFIG_SPI_BFIN_V3)
 	&bf60x_spi_master0,
 	&bf60x_spi_master1,
 #endif
@@ -1261,6 +2018,9 @@ static struct platform_device *ezkit_devices[] __initdata = {
 	&bfin_crc0_device,
 	&bfin_crc1_device,
 #endif
+#if defined(CONFIG_CRYPTO_DEV_BFIN_CRC)
+	&bfin_crypto_crc_device,
+#endif
 
 #if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
 	&bfin_device_gpiokeys,
@@ -1269,12 +2029,16 @@ static struct platform_device *ezkit_devices[] __initdata = {
 #if defined(CONFIG_MTD_PHYSMAP) || defined(CONFIG_MTD_PHYSMAP_MODULE)
 	&ezkit_flash_device,
 #endif
-#if defined(CONFIG_SND_BF6XX_I2S) || defined(CONFIG_SND_BF6XX_I2S_MODULE)
+#if defined(CONFIG_SND_BF5XX_I2S) || defined(CONFIG_SND_BF5XX_I2S_MODULE)
 	&bfin_i2s_pcm,
 #endif
 #if defined(CONFIG_SND_BF6XX_SOC_I2S) || \
 	defined(CONFIG_SND_BF6XX_SOC_I2S_MODULE)
 	&bfin_i2s,
+#endif
+#if defined(CONFIG_SND_BF5XX_SOC_AD1836) || \
+	defined(CONFIG_SND_BF5XX_SOC_AD1836_MODULE)
+	&bfin_ad1836_machine,
 #endif
 #if defined(CONFIG_SND_SOC_BFIN_EVAL_ADAU1X61) || \
 	defined(CONFIG_SND_SOC_BFIN_EVAL_ADAU1X61_MODULE)
@@ -1284,21 +2048,58 @@ static struct platform_device *ezkit_devices[] __initdata = {
 	|| defined(CONFIG_VIDEO_BLACKFIN_CAPTURE_MODULE)
 	&bfin_capture_device,
 #endif
+#if defined(CONFIG_VIDEO_BLACKFIN_DISPLAY) \
+	|| defined(CONFIG_VIDEO_BLACKFIN_DISPLAY_MODULE)
+	&bfin_display_device,
+#endif
+
+};
+
+/* Pin control settings */
+static struct pinctrl_map __initdata bfin_pinmux_map[] = {
+	/* per-device maps */
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-uart.0",  "pinctrl-adi2.0", NULL, "uart0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-uart.1",  "pinctrl-adi2.0", NULL, "uart1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_sir.0",  "pinctrl-adi2.0", NULL, "uart0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_sir.1",  "pinctrl-adi2.0", NULL, "uart1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-sdh.0",  "pinctrl-adi2.0", NULL, "rsi0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("stmmaceth.0",  "pinctrl-adi2.0", NULL, "eth0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-spi3.0",  "pinctrl-adi2.0", NULL, "spi0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-spi3.1",  "pinctrl-adi2.0", NULL, "spi1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-bfin-twi.0",  "pinctrl-adi2.0", NULL, "twi0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-bfin-twi.1",  "pinctrl-adi2.0", NULL, "twi1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-rotary",  "pinctrl-adi2.0", NULL, "rotary"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_can.0",  "pinctrl-adi2.0", NULL, "can0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("physmap-flash.0",  "pinctrl-adi2.0", NULL, "smc0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bf609_nl8048.2",  "pinctrl-adi2.0", NULL, "ppi2_16b"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_display.0",  "pinctrl-adi2.0", NULL, "ppi0_16b"),
+#if defined(CONFIG_VIDEO_MT9M114) || defined(CONFIG_VIDEO_MT9M114_MODULE)
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_capture.0",  "pinctrl-adi2.0", NULL, "ppi0_8b"),
+#elif defined(CONFIG_VIDEO_VS6624) || defined(CONFIG_VIDEO_VS6624_MODULE)
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_capture.0",  "pinctrl-adi2.0", NULL, "ppi0_16b"),
+#else
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin_capture.0",  "pinctrl-adi2.0", NULL, "ppi0_24b"),
+#endif
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-i2s.0",  "pinctrl-adi2.0", NULL, "sport0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-tdm.0",  "pinctrl-adi2.0", NULL, "sport0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-i2s.1",  "pinctrl-adi2.0", NULL, "sport1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-tdm.1",  "pinctrl-adi2.0", NULL, "sport1"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-i2s.2",  "pinctrl-adi2.0", NULL, "sport2"),
+	PIN_MAP_MUX_GROUP_DEFAULT("bfin-tdm.2",  "pinctrl-adi2.0", NULL, "sport2"),
 };
 
 static int __init ezkit_init(void)
 {
 	printk(KERN_INFO "%s(): registering device resources\n", __func__);
 
+	/* Initialize pinmuxing */
+	pinctrl_register_mappings(bfin_pinmux_map,
+				ARRAY_SIZE(bfin_pinmux_map));
+
 	i2c_register_board_info(0, bfin_i2c_board_info0,
 				ARRAY_SIZE(bfin_i2c_board_info0));
 	i2c_register_board_info(1, bfin_i2c_board_info1,
 				ARRAY_SIZE(bfin_i2c_board_info1));
-
-#if defined(CONFIG_STMMAC_ETH) || defined(CONFIG_STMMAC_ETH_MODULE)
-	if (!peripheral_request_list(pins, "emac0"))
-		printk(KERN_ERR "%s(): request emac pins failed\n", __func__);
-#endif
 
 	platform_add_devices(ezkit_devices, ARRAY_SIZE(ezkit_devices));
 
@@ -1316,18 +2117,6 @@ static struct platform_device *ezkit_early_devices[] __initdata = {
 #endif
 #ifdef CONFIG_SERIAL_BFIN_UART1
 	&bfin_uart1_device,
-#endif
-#endif
-
-#if defined(CONFIG_SERIAL_BFIN_SPORT_CONSOLE)
-#ifdef CONFIG_SERIAL_BFIN_SPORT0_UART
-	&bfin_sport0_uart_device,
-#endif
-#ifdef CONFIG_SERIAL_BFIN_SPORT1_UART
-	&bfin_sport1_uart_device,
-#endif
-#ifdef CONFIG_SERIAL_BFIN_SPORT2_UART
-	&bfin_sport2_uart_device,
 #endif
 #endif
 };

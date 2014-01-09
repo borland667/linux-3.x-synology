@@ -136,6 +136,22 @@ static inline void tracepoint_synchronize_unregister(void)
 		postrcu;						\
 	} while (0)
 
+#ifndef MODULE
+#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args)	\
+	static inline void trace_##name##_rcuidle(proto)		\
+	{								\
+		if (static_key_false(&__tracepoint_##name.key))		\
+			__DO_TRACE(&__tracepoint_##name,		\
+				TP_PROTO(data_proto),			\
+				TP_ARGS(data_args),			\
+				TP_CONDITION(cond),			\
+				rcu_irq_enter(),			\
+				rcu_irq_exit());			\
+	}
+#else
+#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args)
+#endif
+
 /*
  * Make sure the alignment of the structure in the __tracepoints section will
  * not add unwanted padding between the beginning of the section and the
@@ -151,16 +167,8 @@ static inline void tracepoint_synchronize_unregister(void)
 				TP_ARGS(data_args),			\
 				TP_CONDITION(cond),,);			\
 	}								\
-	static inline void trace_##name##_rcuidle(proto)		\
-	{								\
-		if (static_branch(&__tracepoint_##name.key))		\
-			__DO_TRACE(&__tracepoint_##name,		\
-				TP_PROTO(data_proto),			\
-				TP_ARGS(data_args),			\
-				TP_CONDITION(cond),			\
-				rcu_idle_exit(),			\
-				rcu_idle_enter());			\
-	}								\
+	__DECLARE_TRACE_RCU(name, PARAMS(proto), PARAMS(args),		\
+		PARAMS(cond), PARAMS(data_proto), PARAMS(data_args))	\
 	static inline int						\
 	register_trace_##name(void (*probe)(data_proto), void *data)	\
 	{								\
@@ -258,6 +266,8 @@ static inline void tracepoint_synchronize_unregister(void)
 			PARAMS(__data, args))
 
 #define TRACE_EVENT_FLAGS(event, flag)
+
+#define TRACE_EVENT_PERF_PERM(event, expr...)
 
 #endif /* DECLARE_TRACE */
 
@@ -370,6 +380,8 @@ static inline void tracepoint_synchronize_unregister(void)
 #define DECLARE_EVENT_CLASS(name, proto, args, tstruct, assign, print)
 #define DEFINE_EVENT(template, name, proto, args)		\
 	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
+#define DEFINE_EVENT_FN(template, name, proto, args, reg, unreg)\
+	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
 #define DEFINE_EVENT_PRINT(template, name, proto, args, print)	\
 	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
 #define DEFINE_EVENT_CONDITION(template, name, proto,		\
@@ -388,5 +400,7 @@ static inline void tracepoint_synchronize_unregister(void)
 				PARAMS(args), PARAMS(cond))
 
 #define TRACE_EVENT_FLAGS(event, flag)
+
+#define TRACE_EVENT_PERF_PERM(event, expr...)
 
 #endif /* ifdef TRACE_EVENT (see note above) */

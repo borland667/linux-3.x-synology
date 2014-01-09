@@ -33,11 +33,8 @@
 #include <asm/prom.h>
 #include <asm/firmware.h>
 #include <asm/tce.h>
-#include <asm/abs_addr.h>
 #include <asm/page.h>
 #include <asm/hvcall.h>
-
-static struct bus_type vio_bus_type;
 
 static struct vio_dev vio_bus_device  = { /* fake "parent" device */
 	.name = "vio",
@@ -613,6 +610,7 @@ static u64 vio_dma_get_required_mask(struct device *dev)
 struct dma_map_ops vio_dma_mapping_ops = {
 	.alloc             = vio_dma_iommu_alloc_coherent,
 	.free              = vio_dma_iommu_free_coherent,
+	.mmap		   = dma_direct_mmap_coherent,
 	.map_sg            = vio_dma_iommu_map_sg,
 	.unmap_sg          = vio_dma_iommu_unmap_sg,
 	.map_page          = vio_dma_iommu_map_page,
@@ -625,7 +623,7 @@ struct dma_map_ops vio_dma_mapping_ops = {
  * vio_cmo_set_dev_desired - Set desired entitlement for a device
  *
  * @viodev: struct vio_dev for device to alter
- * @new_desired: new desired entitlement level in bytes
+ * @desired: new desired entitlement level in bytes
  *
  * For use by devices to request a change to their entitlement at runtime or
  * through sysfs.  The desired entitlement level is changed and a balancing
@@ -999,21 +997,36 @@ static struct device_attribute vio_cmo_dev_attrs[] = {
 /* sysfs bus functions and data structures for CMO */
 
 #define viobus_cmo_rd_attr(name)                                        \
-static ssize_t                                                          \
-viobus_cmo_##name##_show(struct bus_type *bt, char *buf)                \
+static ssize_t cmo_##name##_show(struct bus_type *bt, char *buf)        \
 {                                                                       \
 	return sprintf(buf, "%lu\n", vio_cmo.name);                     \
-}
+}                                                                       \
+static BUS_ATTR_RO(cmo_##name)
 
 #define viobus_cmo_pool_rd_attr(name, var)                              \
 static ssize_t                                                          \
-viobus_cmo_##name##_pool_show_##var(struct bus_type *bt, char *buf)     \
+cmo_##name##_##var##_show(struct bus_type *bt, char *buf)               \
 {                                                                       \
 	return sprintf(buf, "%lu\n", vio_cmo.name.var);                 \
+}                                                                       \
+static BUS_ATTR_RO(cmo_##name##_##var)
+
+viobus_cmo_rd_attr(entitled);
+viobus_cmo_rd_attr(spare);
+viobus_cmo_rd_attr(min);
+viobus_cmo_rd_attr(desired);
+viobus_cmo_rd_attr(curr);
+viobus_cmo_pool_rd_attr(reserve, size);
+viobus_cmo_pool_rd_attr(excess, size);
+viobus_cmo_pool_rd_attr(excess, free);
+
+static ssize_t cmo_high_show(struct bus_type *bt, char *buf)
+{
+	return sprintf(buf, "%lu\n", vio_cmo.high);
 }
 
-static ssize_t viobus_cmo_high_reset(struct bus_type *bt, const char *buf,
-                                     size_t count)
+static ssize_t cmo_high_store(struct bus_type *bt, const char *buf,
+			      size_t count)
 {
 	unsigned long flags;
 
@@ -1023,35 +1036,26 @@ static ssize_t viobus_cmo_high_reset(struct bus_type *bt, const char *buf,
 
 	return count;
 }
+static BUS_ATTR_RW(cmo_high);
 
-viobus_cmo_rd_attr(entitled);
-viobus_cmo_pool_rd_attr(reserve, size);
-viobus_cmo_pool_rd_attr(excess, size);
-viobus_cmo_pool_rd_attr(excess, free);
-viobus_cmo_rd_attr(spare);
-viobus_cmo_rd_attr(min);
-viobus_cmo_rd_attr(desired);
-viobus_cmo_rd_attr(curr);
-viobus_cmo_rd_attr(high);
-
-static struct bus_attribute vio_cmo_bus_attrs[] = {
-	__ATTR(cmo_entitled, S_IRUGO, viobus_cmo_entitled_show, NULL),
-	__ATTR(cmo_reserve_size, S_IRUGO, viobus_cmo_reserve_pool_show_size, NULL),
-	__ATTR(cmo_excess_size, S_IRUGO, viobus_cmo_excess_pool_show_size, NULL),
-	__ATTR(cmo_excess_free, S_IRUGO, viobus_cmo_excess_pool_show_free, NULL),
-	__ATTR(cmo_spare,   S_IRUGO, viobus_cmo_spare_show,   NULL),
-	__ATTR(cmo_min,     S_IRUGO, viobus_cmo_min_show,     NULL),
-	__ATTR(cmo_desired, S_IRUGO, viobus_cmo_desired_show, NULL),
-	__ATTR(cmo_curr,    S_IRUGO, viobus_cmo_curr_show,    NULL),
-	__ATTR(cmo_high,    S_IWUSR|S_IRUSR|S_IWGRP|S_IRGRP|S_IROTH,
-	       viobus_cmo_high_show, viobus_cmo_high_reset),
-	__ATTR_NULL
+static struct attribute *vio_bus_attrs[] = {
+	&bus_attr_cmo_entitled.attr,
+	&bus_attr_cmo_spare.attr,
+	&bus_attr_cmo_min.attr,
+	&bus_attr_cmo_desired.attr,
+	&bus_attr_cmo_curr.attr,
+	&bus_attr_cmo_high.attr,
+	&bus_attr_cmo_reserve_size.attr,
+	&bus_attr_cmo_excess_size.attr,
+	&bus_attr_cmo_excess_free.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(vio_bus);
 
 static void vio_cmo_sysfs_init(void)
 {
 	vio_bus_type.dev_attrs = vio_cmo_dev_attrs;
-	vio_bus_type.bus_attrs = vio_cmo_bus_attrs;
+	vio_bus_type.bus_groups = vio_bus_groups;
 }
 #else /* CONFIG_PPC_SMLPAR */
 int vio_cmo_entitlement_update(size_t new_entitlement) { return 0; }
@@ -1155,7 +1159,7 @@ EXPORT_SYMBOL(vio_h_cop_sync);
 
 static struct iommu_table *vio_build_iommu_table(struct vio_dev *dev)
 {
-	const unsigned char *dma_window;
+	const __be32 *dma_window;
 	struct iommu_table *tbl;
 	unsigned long offset, size;
 
@@ -1262,7 +1266,7 @@ static int vio_bus_remove(struct device *dev)
 
 /**
  * vio_register_driver: - Register a new vio driver
- * @drv:	The vio_driver structure to be registered.
+ * @viodrv:	The vio_driver structure to be registered.
  */
 int __vio_register_driver(struct vio_driver *viodrv, struct module *owner,
 			  const char *mod_name)
@@ -1282,7 +1286,7 @@ EXPORT_SYMBOL(__vio_register_driver);
 
 /**
  * vio_unregister_driver - Remove registration of vio driver.
- * @driver:	The vio_driver struct to be removed form registration
+ * @viodrv:	The vio_driver struct to be removed form registration
  */
 void vio_unregister_driver(struct vio_driver *viodrv)
 {
@@ -1291,13 +1295,12 @@ void vio_unregister_driver(struct vio_driver *viodrv)
 EXPORT_SYMBOL(vio_unregister_driver);
 
 /* vio_dev refcount hit 0 */
-static void __devinit vio_dev_release(struct device *dev)
+static void vio_dev_release(struct device *dev)
 {
 	struct iommu_table *tbl = get_iommu_table_base(dev);
 
 	if (tbl)
-		iommu_free_table(tbl, dev->of_node ?
-			dev->of_node->full_name : dev_name(dev));
+		iommu_free_table(tbl, of_node_full_name(dev->of_node));
 	of_node_put(dev->of_node);
 	kfree(to_vio_dev(dev));
 }
@@ -1315,8 +1318,7 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 {
 	struct vio_dev *viodev;
 	struct device_node *parent_node;
-	const unsigned int *unit_address;
-	const unsigned int *pfo_resid = NULL;
+	const __be32 *prop;
 	enum vio_dev_family family;
 	const char *of_node_name = of_node->name ? of_node->name : "<unknown>";
 
@@ -1363,6 +1365,8 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 	/* we need the 'device_type' property, in order to match with drivers */
 	viodev->family = family;
 	if (viodev->family == VDEVICE) {
+		unsigned int unit_address;
+
 		if (of_node->type != NULL)
 			viodev->type = of_node->type;
 		else {
@@ -1371,24 +1375,24 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 			goto out;
 		}
 
-		unit_address = of_get_property(of_node, "reg", NULL);
-		if (unit_address == NULL) {
+		prop = of_get_property(of_node, "reg", NULL);
+		if (prop == NULL) {
 			pr_warn("%s: node %s missing 'reg'\n",
 					__func__, of_node_name);
 			goto out;
 		}
-		dev_set_name(&viodev->dev, "%x", *unit_address);
+		unit_address = of_read_number(prop, 1);
+		dev_set_name(&viodev->dev, "%x", unit_address);
 		viodev->irq = irq_of_parse_and_map(of_node, 0);
-		viodev->unit_address = *unit_address;
+		viodev->unit_address = unit_address;
 	} else {
 		/* PFO devices need their resource_id for submitting COP_OPs
 		 * This is an optional field for devices, but is required when
 		 * performing synchronous ops */
-		pfo_resid = of_get_property(of_node, "ibm,resource-id", NULL);
-		if (pfo_resid != NULL)
-			viodev->resource_id = *pfo_resid;
+		prop = of_get_property(of_node, "ibm,resource-id", NULL);
+		if (prop != NULL)
+			viodev->resource_id = of_read_number(prop, 1);
 
-		unit_address = NULL;
 		dev_set_name(&viodev->dev, "%s", of_node_name);
 		viodev->type = of_node_name;
 		viodev->irq = 0;
@@ -1397,21 +1401,26 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 	viodev->name = of_node->name;
 	viodev->dev.of_node = of_node_get(of_node);
 
-	if (firmware_has_feature(FW_FEATURE_CMO))
-		vio_cmo_set_dma_ops(viodev);
-	else
-		set_dma_ops(&viodev->dev, &dma_iommu_ops);
-	set_iommu_table_base(&viodev->dev, vio_build_iommu_table(viodev));
 	set_dev_node(&viodev->dev, of_node_to_nid(of_node));
 
 	/* init generic 'struct device' fields: */
 	viodev->dev.parent = &vio_bus_device.dev;
 	viodev->dev.bus = &vio_bus_type;
 	viodev->dev.release = vio_dev_release;
-        /* needed to ensure proper operation of coherent allocations
-         * later, in case driver doesn't set it explicitly */
-        dma_set_mask(&viodev->dev, DMA_BIT_MASK(64));
-        dma_set_coherent_mask(&viodev->dev, DMA_BIT_MASK(64));
+
+	if (of_get_property(viodev->dev.of_node, "ibm,my-dma-window", NULL)) {
+		if (firmware_has_feature(FW_FEATURE_CMO))
+			vio_cmo_set_dma_ops(viodev);
+		else
+			set_dma_ops(&viodev->dev, &dma_iommu_ops);
+
+		set_iommu_table_base(&viodev->dev,
+				     vio_build_iommu_table(viodev));
+
+		/* needed to ensure proper operation of coherent allocations
+		 * later, in case driver doesn't set it explicitly */
+		dma_coerce_mask_and_coherent(&viodev->dev, DMA_BIT_MASK(64));
+	}
 
 	/* register with generic device framework */
 	if (device_register(&viodev->dev)) {
@@ -1491,12 +1500,18 @@ static int __init vio_bus_init(void)
 	if (firmware_has_feature(FW_FEATURE_CMO))
 		vio_cmo_bus_init();
 
+	return 0;
+}
+postcore_initcall(vio_bus_init);
+
+static int __init vio_device_init(void)
+{
 	vio_bus_scan_register_devices("vdevice");
 	vio_bus_scan_register_devices("ibm,platform-facilities");
 
 	return 0;
 }
-__initcall(vio_bus_init);
+device_initcall(vio_device_init);
 
 static ssize_t name_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1509,7 +1524,7 @@ static ssize_t devspec_show(struct device *dev,
 {
 	struct device_node *of_node = dev->of_node;
 
-	return sprintf(buf, "%s\n", of_node ? of_node->full_name : "none");
+	return sprintf(buf, "%s\n", of_node_full_name(of_node));
 }
 
 static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
@@ -1520,11 +1535,15 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 	const char *cp;
 
 	dn = dev->of_node;
-	if (!dn)
-		return -ENODEV;
+	if (!dn) {
+		strcpy(buf, "\n");
+		return strlen(buf);
+	}
 	cp = of_get_property(dn, "compatible", NULL);
-	if (!cp)
-		return -ENODEV;
+	if (!cp) {
+		strcpy(buf, "\n");
+		return strlen(buf);
+	}
 
 	return sprintf(buf, "vio:T%sS%s\n", vio_dev->type, cp);
 }
@@ -1536,7 +1555,7 @@ static struct device_attribute vio_dev_attrs[] = {
 	__ATTR_NULL
 };
 
-void __devinit vio_unregister_device(struct vio_dev *viodev)
+void vio_unregister_device(struct vio_dev *viodev)
 {
 	device_unregister(&viodev->dev);
 }
@@ -1568,7 +1587,7 @@ static int vio_hotplug(struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
-static struct bus_type vio_bus_type = {
+struct bus_type vio_bus_type = {
 	.name = "vio",
 	.dev_attrs = vio_dev_attrs,
 	.uevent = vio_hotplug,
@@ -1613,7 +1632,6 @@ static struct vio_dev *vio_find_name(const char *name)
  */
 struct vio_dev *vio_find_node(struct device_node *vnode)
 {
-	const uint32_t *unit_address;
 	char kobj_name[20];
 	struct device_node *vnode_parent;
 	const char *dev_type;
@@ -1629,10 +1647,13 @@ struct vio_dev *vio_find_node(struct device_node *vnode)
 
 	/* construct the kobject name from the device node */
 	if (!strcmp(dev_type, "vdevice")) {
-		unit_address = of_get_property(vnode, "reg", NULL);
-		if (!unit_address)
+		const __be32 *prop;
+		
+		prop = of_get_property(vnode, "reg", NULL);
+		if (!prop)
 			return NULL;
-		snprintf(kobj_name, sizeof(kobj_name), "%x", *unit_address);
+		snprintf(kobj_name, sizeof(kobj_name), "%x",
+			 (uint32_t)of_read_number(prop, 1));
 	} else if (!strcmp(dev_type, "ibm,platform-facilities"))
 		snprintf(kobj_name, sizeof(kobj_name), "%s", vnode->name);
 	else

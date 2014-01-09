@@ -121,7 +121,6 @@ static int __init early_fill_mp_bus_info(void)
 		link = (reg >> 8) & 0x03;
 
 		info = alloc_pci_root_info(min_bus, max_bus, node, link);
-		sprintf(info->name, "PCI Bus #%02x", min_bus);
 	}
 
 	/* get the default node and link for left over res */
@@ -300,9 +299,9 @@ static int __init early_fill_mp_bus_info(void)
 		int busnum;
 		struct pci_root_res *root_res;
 
-		busnum = info->bus_min;
-		printk(KERN_DEBUG "bus: [%02x, %02x] on node %x link %x\n",
-		       info->bus_min, info->bus_max, info->node, info->link);
+		busnum = info->busn.start;
+		printk(KERN_DEBUG "bus: %pR on node %x link %x\n",
+		       &info->busn, info->node, info->link);
 		list_for_each_entry(root_res, &info->resources, list)
 			printk(KERN_DEBUG "bus: %02x %pR\n",
 				       busnum, &root_res->res);
@@ -313,7 +312,7 @@ static int __init early_fill_mp_bus_info(void)
 
 #define ENABLE_CF8_EXT_CFG      (1ULL << 46)
 
-static void __cpuinit enable_pci_io_ecs(void *unused)
+static void enable_pci_io_ecs(void *unused)
 {
 	u64 reg;
 	rdmsrl(MSR_AMD64_NB_CFG, reg);
@@ -323,8 +322,8 @@ static void __cpuinit enable_pci_io_ecs(void *unused)
 	}
 }
 
-static int __cpuinit amd_cpu_notify(struct notifier_block *self,
-				    unsigned long action, void *hcpu)
+static int amd_cpu_notify(struct notifier_block *self, unsigned long action,
+			  void *hcpu)
 {
 	int cpu = (long)hcpu;
 	switch (action) {
@@ -338,7 +337,7 @@ static int __cpuinit amd_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block __cpuinitdata amd_cpu_notifier = {
+static struct notifier_block amd_cpu_notifier = {
 	.notifier_call	= amd_cpu_notify,
 };
 

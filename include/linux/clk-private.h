@@ -33,8 +33,11 @@ struct clk {
 	const char		**parent_names;
 	struct clk		**parents;
 	u8			num_parents;
+	u8			new_parent_index;
 	unsigned long		rate;
 	unsigned long		new_rate;
+	struct clk		*new_parent;
+	struct clk		*new_child;
 	unsigned long		flags;
 	unsigned int		enable_count;
 	unsigned int		prepare_count;
@@ -64,7 +67,7 @@ struct clk {
 		.parent_names = _parent_names,			\
 		.num_parents = ARRAY_SIZE(_parent_names),	\
 		.parents = _parents,				\
-		.flags = _flags,				\
+		.flags = _flags | CLK_IS_BASIC,			\
 	}
 
 #define DEFINE_CLK_FIXED_RATE(_name, _flags, _rate,		\
@@ -103,9 +106,9 @@ struct clk {
 	DEFINE_CLK(_name, clk_gate_ops, _flags,			\
 			_name##_parent_names, _name##_parents);
 
-#define DEFINE_CLK_DIVIDER(_name, _parent_name, _parent_ptr,	\
+#define _DEFINE_CLK_DIVIDER(_name, _parent_name, _parent_ptr,	\
 				_flags, _reg, _shift, _width,	\
-				_divider_flags, _lock)		\
+				_divider_flags, _table, _lock)	\
 	static struct clk _name;				\
 	static const char *_name##_parent_names[] = {		\
 		_parent_name,					\
@@ -121,10 +124,26 @@ struct clk {
 		.shift = _shift,				\
 		.width = _width,				\
 		.flags = _divider_flags,			\
+		.table = _table,				\
 		.lock = _lock,					\
 	};							\
 	DEFINE_CLK(_name, clk_divider_ops, _flags,		\
 			_name##_parent_names, _name##_parents);
+
+#define DEFINE_CLK_DIVIDER(_name, _parent_name, _parent_ptr,	\
+				_flags, _reg, _shift, _width,	\
+				_divider_flags, _lock)		\
+	_DEFINE_CLK_DIVIDER(_name, _parent_name, _parent_ptr,	\
+				_flags, _reg, _shift, _width,	\
+				_divider_flags, NULL, _lock)
+
+#define DEFINE_CLK_DIVIDER_TABLE(_name, _parent_name,		\
+				_parent_ptr, _flags, _reg,	\
+				_shift, _width, _divider_flags,	\
+				_table, _lock)			\
+	_DEFINE_CLK_DIVIDER(_name, _parent_name, _parent_ptr,	\
+				_flags, _reg, _shift, _width,	\
+				_divider_flags, _table, _lock)	\
 
 #define DEFINE_CLK_MUX(_name, _parent_names, _parents, _flags,	\
 				_reg, _shift, _width,		\
@@ -136,7 +155,7 @@ struct clk {
 		},						\
 		.reg = _reg,					\
 		.shift = _shift,				\
-		.width = _width,				\
+		.mask = BIT(_width) - 1,			\
 		.flags = _mux_flags,				\
 		.lock = _lock,					\
 	};							\

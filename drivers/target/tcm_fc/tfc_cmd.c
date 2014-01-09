@@ -19,7 +19,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <generated/utsrelease.h>
 #include <linux/utsname.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -29,6 +28,7 @@
 #include <linux/configfs.h>
 #include <linux/ctype.h>
 #include <linux/hash.h>
+#include <linux/percpu_ida.h>
 #include <asm/unaligned.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
@@ -48,7 +48,7 @@
 /*
  * Dump cmd state for debugging.
  */
-void ft_dump_cmd(struct ft_cmd *cmd, const char *caller)
+static void _ft_dump_cmd(struct ft_cmd *cmd, const char *caller)
 {
 	struct fc_exch *ep;
 	struct fc_seq *sp;
@@ -80,20 +80,28 @@ void ft_dump_cmd(struct ft_cmd *cmd, const char *caller)
 	}
 }
 
+void ft_dump_cmd(struct ft_cmd *cmd, const char *caller)
+{
+	if (unlikely(ft_debug_logging))
+		_ft_dump_cmd(cmd, caller);
+}
+
 static void ft_free_cmd(struct ft_cmd *cmd)
 {
 	struct fc_frame *fp;
 	struct fc_lport *lport;
+	struct se_session *se_sess;
 
 	if (!cmd)
 		return;
+	se_sess = cmd->sess->se_sess;
 	fp = cmd->req_frame;
 	lport = fr_dev(fp);
 	if (fr_seq(fp))
 		lport->tt.seq_release(fr_seq(fp));
 	fc_frame_free(fp);
+	percpu_ida_free(&se_sess->sess_tag_pool, cmd->se_cmd.map_tag);
 	ft_sess_put(cmd->sess);	/* undo get from lookup at recv */
-	kfree(cmd);
 }
 
 void ft_release_cmd(struct se_cmd *se_cmd)
@@ -215,7 +223,7 @@ int ft_write_pending(struct se_cmd *se_cmd)
 		 */
 		if ((ep->xid <= lport->lro_xid) &&
 		    (fh->fh_r_ctl == FC_RCTL_DD_DATA_DESC)) {
-			if ((se_cmd->se_cmd_flags & SCF_SCSI_DATA_SG_IO_CDB) &&
+			if ((se_cmd->se_cmd_flags & SCF_SCSI_DATA_CDB) &&
 			    lport->tt.ddp_target(lport, ep->xid,
 						 se_cmd->t_data_sg,
 						 se_cmd->t_data_nents))
@@ -230,6 +238,8 @@ u32 ft_get_task_tag(struct se_cmd *se_cmd)
 {
 	struct ft_cmd *cmd = container_of(se_cmd, struct ft_cmd, se_cmd);
 
+	if (cmd->aborted)
+		return ~0;
 	return fc_seq_exch(cmd->seq)->rxid;
 }
 
@@ -387,14 +397,14 @@ static void ft_send_tm(struct ft_cmd *cmd)
 /*
  * Send status from completed task management request.
  */
-int ft_queue_tm_resp(struct se_cmd *se_cmd)
+void ft_queue_tm_resp(struct se_cmd *se_cmd)
 {
 	struct ft_cmd *cmd = container_of(se_cmd, struct ft_cmd, se_cmd);
 	struct se_tmr_req *tmr = se_cmd->se_tmr_req;
 	enum fcp_resp_rsp_codes code;
 
 	if (cmd->aborted)
-		return 0;
+		return;
 	switch (tmr->response) {
 	case TMR_FUNCTION_COMPLETE:
 		code = FCP_TMF_CMPL;
@@ -406,10 +416,7 @@ int ft_queue_tm_resp(struct se_cmd *se_cmd)
 		code = FCP_TMF_REJECTED;
 		break;
 	case TMR_TASK_DOES_NOT_EXIST:
-	case TMR_TASK_STILL_ALLEGIANT:
-	case TMR_TASK_FAILOVER_NOT_SUPPORTED:
 	case TMR_TASK_MGMT_FUNCTION_NOT_SUPPORTED:
-	case TMR_FUNCTION_AUTHORIZATION_FAILED:
 	default:
 		code = FCP_TMF_FAILED;
 		break;
@@ -417,7 +424,6 @@ int ft_queue_tm_resp(struct se_cmd *se_cmd)
 	pr_debug("tmr fn %d resp %d fcp code %d\n",
 		  tmr->function, tmr->response, code);
 	ft_send_resp_code(cmd, code);
-	return 0;
 }
 
 static void ft_send_work(struct work_struct *work);
@@ -429,14 +435,21 @@ static void ft_recv_cmd(struct ft_sess *sess, struct fc_frame *fp)
 {
 	struct ft_cmd *cmd;
 	struct fc_lport *lport = sess->tport->lport;
+	struct se_session *se_sess = sess->se_sess;
+	int tag;
 
-	cmd = kzalloc(sizeof(*cmd), GFP_ATOMIC);
-	if (!cmd)
+	tag = percpu_ida_alloc(&se_sess->sess_tag_pool, GFP_ATOMIC);
+	if (tag < 0)
 		goto busy;
+
+	cmd = &((struct ft_cmd *)se_sess->sess_cmd_map)[tag];
+	memset(cmd, 0, sizeof(struct ft_cmd));
+
+	cmd->se_cmd.map_tag = tag;
 	cmd->sess = sess;
 	cmd->seq = lport->tt.seq_assign(lport, fp);
 	if (!cmd->seq) {
-		kfree(cmd);
+		percpu_ida_free(&se_sess->sess_tag_pool, tag);
 		goto busy;
 	}
 	cmd->req_frame = fp;		/* hold frame during cmd */
@@ -541,9 +554,11 @@ static void ft_send_work(struct work_struct *work)
 	 * Use a single se_cmd->cmd_kref as we expect to release se_cmd
 	 * directly from ft_check_stop_free callback in response path.
 	 */
-	target_submit_cmd(&cmd->se_cmd, cmd->sess->se_sess, fcp->fc_cdb,
-			&cmd->ft_sense_buffer[0], scsilun_to_int(&fcp->fc_lun),
-			ntohl(fcp->fc_dl), task_attr, data_dir, 0);
+	if (target_submit_cmd(&cmd->se_cmd, cmd->sess->se_sess, fcp->fc_cdb,
+			      &cmd->ft_sense_buffer[0], scsilun_to_int(&fcp->fc_lun),
+			      ntohl(fcp->fc_dl), task_attr, data_dir, 0))
+		goto err;
+
 	pr_debug("r_ctl %x alloc target_submit_cmd\n", fh->fh_r_ctl);
 	return;
 

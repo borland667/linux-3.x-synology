@@ -28,6 +28,7 @@
 #include <linux/i2c.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
+#include <linux/of.h>
 #include <linux/pm_runtime.h>
 #include <linux/mutex.h>
 #include <linux/mfd/core.h>
@@ -110,7 +111,6 @@ static int max77693_i2c_probe(struct i2c_client *i2c,
 			      const struct i2c_device_id *id)
 {
 	struct max77693_dev *max77693;
-	struct max77693_platform_data *pdata = i2c->dev.platform_data;
 	u8 reg_data;
 	int ret = 0;
 
@@ -119,32 +119,25 @@ static int max77693_i2c_probe(struct i2c_client *i2c,
 	if (max77693 == NULL)
 		return -ENOMEM;
 
-	max77693->regmap = devm_regmap_init_i2c(i2c, &max77693_regmap_config);
-	if (IS_ERR(max77693->regmap)) {
-		ret = PTR_ERR(max77693->regmap);
-		dev_err(max77693->dev,"failed to allocate register map: %d\n",
-				ret);
-		goto err_regmap;
-	}
-
 	i2c_set_clientdata(i2c, max77693);
 	max77693->dev = &i2c->dev;
 	max77693->i2c = i2c;
 	max77693->irq = i2c->irq;
 	max77693->type = id->driver_data;
 
-	if (!pdata)
-		goto err_regmap;
+	max77693->regmap = devm_regmap_init_i2c(i2c, &max77693_regmap_config);
+	if (IS_ERR(max77693->regmap)) {
+		ret = PTR_ERR(max77693->regmap);
+		dev_err(max77693->dev, "failed to allocate register map: %d\n",
+				ret);
+		return ret;
+	}
 
-	max77693->wakeup = pdata->wakeup;
-
-	mutex_init(&max77693->iolock);
-
-	if (max77693_read_reg(max77693->regmap,
-				MAX77693_PMIC_REG_PMIC_ID2, &reg_data) < 0) {
+	ret = max77693_read_reg(max77693->regmap, MAX77693_PMIC_REG_PMIC_ID2,
+				&reg_data);
+	if (ret < 0) {
 		dev_err(max77693->dev, "device not found on this channel\n");
-		ret = -ENODEV;
-		goto err_regmap;
+		return ret;
 	} else
 		dev_info(max77693->dev, "device ID: 0x%x\n", reg_data);
 
@@ -154,27 +147,39 @@ static int max77693_i2c_probe(struct i2c_client *i2c,
 	max77693->haptic = i2c_new_dummy(i2c->adapter, I2C_ADDR_HAPTIC);
 	i2c_set_clientdata(max77693->haptic, max77693);
 
+	/*
+	 * Initialize register map for MUIC device because use regmap-muic
+	 * instance of MUIC device when irq of max77693 is initialized
+	 * before call max77693-muic probe() function.
+	 */
+	max77693->regmap_muic = devm_regmap_init_i2c(max77693->muic,
+					 &max77693_regmap_config);
+	if (IS_ERR(max77693->regmap_muic)) {
+		ret = PTR_ERR(max77693->regmap_muic);
+		dev_err(max77693->dev,
+			"failed to allocate register map: %d\n", ret);
+		goto err_regmap_muic;
+	}
+
 	ret = max77693_irq_init(max77693);
 	if (ret < 0)
-		goto err_mfd;
+		goto err_irq;
 
 	pm_runtime_set_active(max77693->dev);
 
 	ret = mfd_add_devices(max77693->dev, -1, max77693_devs,
-			ARRAY_SIZE(max77693_devs), NULL, 0);
+			      ARRAY_SIZE(max77693_devs), NULL, 0, NULL);
 	if (ret < 0)
 		goto err_mfd;
-
-	device_init_wakeup(max77693->dev, pdata->wakeup);
 
 	return ret;
 
 err_mfd:
+	max77693_irq_exit(max77693);
+err_irq:
+err_regmap_muic:
 	i2c_unregister_device(max77693->muic);
 	i2c_unregister_device(max77693->haptic);
-err_regmap:
-	kfree(max77693);
-
 	return ret;
 }
 
@@ -183,6 +188,7 @@ static int max77693_i2c_remove(struct i2c_client *i2c)
 	struct max77693_dev *max77693 = i2c_get_clientdata(i2c);
 
 	mfd_remove_devices(max77693->dev);
+	max77693_irq_exit(max77693);
 	i2c_unregister_device(max77693->muic);
 	i2c_unregister_device(max77693->haptic);
 
@@ -215,16 +221,24 @@ static int max77693_resume(struct device *dev)
 	return max77693_irq_resume(max77693);
 }
 
-const struct dev_pm_ops max77693_pm = {
+static const struct dev_pm_ops max77693_pm = {
 	.suspend = max77693_suspend,
 	.resume = max77693_resume,
 };
+
+#ifdef CONFIG_OF
+static struct of_device_id max77693_dt_match[] = {
+	{ .compatible = "maxim,max77693" },
+	{},
+};
+#endif
 
 static struct i2c_driver max77693_i2c_driver = {
 	.driver = {
 		   .name = "max77693",
 		   .owner = THIS_MODULE,
 		   .pm = &max77693_pm,
+		   .of_match_table = of_match_ptr(max77693_dt_match),
 	},
 	.probe = max77693_i2c_probe,
 	.remove = max77693_i2c_remove,

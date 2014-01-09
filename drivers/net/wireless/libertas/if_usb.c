@@ -10,6 +10,7 @@
 #include <linux/netdevice.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
+#include <linux/olpc-ec.h>
 
 #ifdef CONFIG_OLPC
 #include <asm/olpc.h>
@@ -302,14 +303,13 @@ error:
 static void if_usb_disconnect(struct usb_interface *intf)
 {
 	struct if_usb_card *cardp = usb_get_intfdata(intf);
-	struct lbs_private *priv = (struct lbs_private *) cardp->priv;
+	struct lbs_private *priv = cardp->priv;
 
 	lbs_deb_enter(LBS_DEB_MAIN);
 
 	cardp->surprise_removed = 1;
 
 	if (priv) {
-		priv->surpriseremoved = 1;
 		lbs_stop_card(priv);
 		lbs_remove_card(priv);
 	}
@@ -844,7 +844,7 @@ static void if_usb_prog_firmware(struct lbs_private *priv, int ret,
 	cardp->fw = fw;
 	if (check_fwfile_format(cardp->fw->data, cardp->fw->size)) {
 		ret = -EINVAL;
-		goto release_fw;
+		goto done;
 	}
 
 	/* Cancel any pending usb business */
@@ -861,7 +861,7 @@ restart:
 	if (if_usb_submit_rx_urb_fwload(cardp) < 0) {
 		lbs_deb_usbd(&cardp->udev->dev, "URB submission is failed\n");
 		ret = -EIO;
-		goto release_fw;
+		goto done;
 	}
 
 	cardp->bootcmdresp = 0;
@@ -883,14 +883,14 @@ restart:
 		usb_kill_urb(cardp->tx_urb);
 		if (if_usb_submit_rx_urb(cardp) < 0)
 			ret = -EIO;
-		goto release_fw;
+		goto done;
 	} else if (cardp->bootcmdresp <= 0) {
 		if (--reset_count >= 0) {
 			if_usb_reset_device(cardp);
 			goto restart;
 		}
 		ret = -EIO;
-		goto release_fw;
+		goto done;
 	}
 
 	i = 0;
@@ -921,14 +921,14 @@ restart:
 
 		pr_info("FW download failure, time = %d ms\n", i * 100);
 		ret = -EIO;
-		goto release_fw;
+		goto done;
 	}
 
 	cardp->priv->fw_ready = 1;
 	if_usb_submit_rx_urb(cardp);
 
 	if (lbs_start_card(priv))
-		goto release_fw;
+		goto done;
 
 	if_usb_setup_firmware(priv);
 
@@ -939,11 +939,8 @@ restart:
 	if (lbs_host_sleep_cfg(priv, priv->wol_criteria, NULL))
 		priv->ehs_remove_supported = false;
 
- release_fw:
-	release_firmware(cardp->fw);
-	cardp->fw = NULL;
-
  done:
+	cardp->fw = NULL;
 	lbs_deb_leave(LBS_DEB_USB);
 }
 

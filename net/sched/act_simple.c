@@ -95,8 +95,9 @@ static const struct nla_policy simple_policy[TCA_DEF_MAX + 1] = {
 	[TCA_DEF_DATA]	= { .type = NLA_STRING, .len = SIMP_MAX_DATA },
 };
 
-static int tcf_simp_init(struct nlattr *nla, struct nlattr *est,
-			 struct tc_action *a, int ovr, int bind)
+static int tcf_simp_init(struct net *net, struct nlattr *nla,
+			 struct nlattr *est, struct tc_action *a,
+			 int ovr, int bind)
 {
 	struct nlattr *tb[TCA_DEF_MAX + 1];
 	struct tc_defact *parm;
@@ -131,17 +132,23 @@ static int tcf_simp_init(struct nlattr *nla, struct nlattr *est,
 		d = to_defact(pc);
 		ret = alloc_defdata(d, defdata);
 		if (ret < 0) {
-			kfree(pc);
+			if (est)
+				gen_kill_estimator(&pc->tcfc_bstats,
+						   &pc->tcfc_rate_est);
+			kfree_rcu(pc, tcfc_rcu);
 			return ret;
 		}
 		d->tcf_action = parm->action;
 		ret = ACT_P_CREATED;
 	} else {
 		d = to_defact(pc);
-		if (!ovr) {
-			tcf_simp_release(d, bind);
+
+		if (bind)
+			return 0;
+		tcf_simp_release(d, bind);
+		if (!ovr)
 			return -EEXIST;
-		}
+
 		reset_policy(d, defdata, parm);
 	}
 
@@ -197,7 +204,6 @@ static struct tc_action_ops act_simp_ops = {
 	.dump		=	tcf_simp_dump,
 	.cleanup	=	tcf_simp_cleanup,
 	.init		=	tcf_simp_init,
-	.walk		=	tcf_generic_walker,
 };
 
 MODULE_AUTHOR("Jamal Hadi Salim(2005)");

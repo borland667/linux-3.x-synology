@@ -72,10 +72,21 @@ static inline codel_time_t codel_get_time(void)
 	return ns >> CODEL_SHIFT;
 }
 
-#define codel_time_after(a, b)		((s32)(a) - (s32)(b) > 0)
-#define codel_time_after_eq(a, b)	((s32)(a) - (s32)(b) >= 0)
-#define codel_time_before(a, b)		((s32)(a) - (s32)(b) < 0)
-#define codel_time_before_eq(a, b)	((s32)(a) - (s32)(b) <= 0)
+/* Dealing with timer wrapping, according to RFC 1982, as desc in wikipedia:
+ *  https://en.wikipedia.org/wiki/Serial_number_arithmetic#General_Solution
+ * codel_time_after(a,b) returns true if the time a is after time b.
+ */
+#define codel_time_after(a, b)						\
+	(typecheck(codel_time_t, a) &&					\
+	 typecheck(codel_time_t, b) &&					\
+	 ((s32)((a) - (b)) > 0))
+#define codel_time_before(a, b) 	codel_time_after(b, a)
+
+#define codel_time_after_eq(a, b)					\
+	(typecheck(codel_time_t, a) &&					\
+	 typecheck(codel_time_t, b) &&					\
+	 ((s32)((a) - (b)) >= 0))
+#define codel_time_before_eq(a, b)	codel_time_after_eq(b, a)
 
 /* Qdiscs using codel plugin must use codel_skb_cb in their own cb[] */
 struct codel_skb_cb {
@@ -305,6 +316,8 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			}
 		}
 	} else if (drop) {
+		u32 delta;
+
 		if (params->ecn && INET_ECN_set_ce(skb)) {
 			stats->ecn_mark++;
 		} else {
@@ -320,9 +333,11 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 		 * assume that the drop rate that controlled the queue on the
 		 * last cycle is a good starting point to control it now.
 		 */
-		if (codel_time_before(now - vars->drop_next,
+		delta = vars->count - vars->lastcount;
+		if (delta > 1 &&
+		    codel_time_before(now - vars->drop_next,
 				      16 * params->interval)) {
-			vars->count = (vars->count - vars->lastcount) | 1;
+			vars->count = delta;
 			/* we dont care if rec_inv_sqrt approximation
 			 * is not very precise :
 			 * Next Newton steps will correct it quadratically.

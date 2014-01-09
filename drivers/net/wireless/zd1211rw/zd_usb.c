@@ -155,7 +155,6 @@ static int upload_code(struct usb_device *udev,
 	 */
 	p = kmalloc(MAX_TRANSFER_SIZE, GFP_KERNEL);
 	if (!p) {
-		dev_err(&udev->dev, "out of memory\n");
 		r = -ENOMEM;
 		goto error;
 	}
@@ -1164,8 +1163,7 @@ void zd_usb_reset_rx_idle_timer(struct zd_usb *usb)
 {
 	struct zd_usb_rx *rx = &usb->rx;
 
-	cancel_delayed_work(&rx->idle_work);
-	queue_delayed_work(zd_workqueue, &rx->idle_work, ZD_RX_IDLE_INTERVAL);
+	mod_delayed_work(zd_workqueue, &rx->idle_work, ZD_RX_IDLE_INTERVAL);
 }
 
 static inline void init_usb_interrupt(struct zd_usb *usb)
@@ -1621,7 +1619,7 @@ static void prepare_read_regs_int(struct zd_usb *usb,
 	atomic_set(&intr->read_regs_enabled, 1);
 	intr->read_regs.req = req;
 	intr->read_regs.req_count = count;
-	INIT_COMPLETION(intr->read_regs.completion);
+	reinit_completion(&intr->read_regs.completion);
 	spin_unlock_irq(&intr->lock);
 }
 

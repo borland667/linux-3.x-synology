@@ -21,6 +21,9 @@
 #include <linux/input.h>
 #include <linux/input/sh_keysc.h>
 #include <linux/i2c.h>
+#include <linux/platform_data/lv5207lp.h>
+#include <linux/regulator/fixed.h>
+#include <linux/regulator/machine.h>
 #include <linux/usb/r8a66597.h>
 #include <linux/videodev2.h>
 #include <linux/sh_intc.h>
@@ -156,8 +159,6 @@ static struct sh_mobile_lcdc_info kfr2r09_sh_lcdc_info = {
 			.height = 58,
 			.setup_sys = kfr2r09_lcd_setup,
 			.start_transfer = kfr2r09_lcd_start,
-			.display_on = kfr2r09_lcd_on,
-			.display_off = kfr2r09_lcd_off,
 		},
 		.sys_bus_cfg = {
 			.ldmt2r = 0x07010904,
@@ -188,6 +189,17 @@ static struct platform_device kfr2r09_sh_lcdc_device = {
 	.dev	= {
 		.platform_data	= &kfr2r09_sh_lcdc_info,
 	},
+};
+
+static struct lv5207lp_platform_data kfr2r09_backlight_data = {
+	.fbdev = &kfr2r09_sh_lcdc_device.dev,
+	.def_value = 13,
+	.max_value = 13,
+};
+
+static struct i2c_board_info kfr2r09_backlight_board_info = {
+	I2C_BOARD_INFO("lv5207lp", 0x75),
+	.platform_data = &kfr2r09_backlight_data,
 };
 
 static struct r8a66597_platdata kfr2r09_usb0_gadget_data = {
@@ -339,6 +351,13 @@ static struct platform_device kfr2r09_camera = {
 	.dev	= {
 		.platform_data = &rj54n1_link,
 	},
+};
+
+/* Fixed 3.3V regulator to be used by SDHI0 */
+static struct regulator_consumer_supply fixed3v3_power_consumers[] =
+{
+	REGULATOR_SUPPLY("vmmc", "sh_mobile_sdhi.0"),
+	REGULATOR_SUPPLY("vqmmc", "sh_mobile_sdhi.0"),
 };
 
 static struct resource kfr2r09_sh_sdhi0_resources[] = {
@@ -523,6 +542,9 @@ static int __init kfr2r09_devices_setup(void)
 					&kfr2r09_sdram_leave_start,
 					&kfr2r09_sdram_leave_end);
 
+	regulator_register_always_on(0, "fixed-3.3V", fixed3v3_power_consumers,
+				     ARRAY_SIZE(fixed3v3_power_consumers), 3300000);
+
 	/* enable SCIF1 serial port for YC401 console support */
 	gpio_request(GPIO_FN_SCIF1_RXD, NULL);
 	gpio_request(GPIO_FN_SCIF1_TXD, NULL);
@@ -611,6 +633,8 @@ static int __init kfr2r09_devices_setup(void)
 	gpio_request(GPIO_FN_SDHI0D0, NULL);
 	gpio_request(GPIO_FN_SDHI0CMD, NULL);
 	gpio_request(GPIO_FN_SDHI0CLK, NULL);
+
+	i2c_register_board_info(0, &kfr2r09_backlight_board_info, 1);
 
 	return platform_add_devices(kfr2r09_devices,
 				    ARRAY_SIZE(kfr2r09_devices));

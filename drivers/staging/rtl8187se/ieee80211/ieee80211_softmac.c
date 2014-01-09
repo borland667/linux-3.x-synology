@@ -1,5 +1,5 @@
 /* IEEE 802.11 SoftMAC layer
- * Copyright (c) 2005 Andrea Merello <andreamrl@tiscali.it>
+ * Copyright (c) 2005 Andrea Merello <andrea.merello@gmail.com>
  *
  * Mostly extracted from the rtl8180-sa2400 driver for the
  * in-kernel generic ieee802.11 stack.
@@ -21,6 +21,7 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <asm/uaccess.h>
+#include <linux/etherdevice.h>
 
 #include "dot11d.h"
 u8 rsn_authen_cipher_suite[16][4] = {
@@ -886,7 +887,8 @@ static struct sk_buff* ieee80211_probe_resp(struct ieee80211_device *ieee, u8 *d
 	return skb;
 }
 
-struct sk_buff* ieee80211_assoc_resp(struct ieee80211_device *ieee, u8 *dest)
+static struct sk_buff *ieee80211_assoc_resp(struct ieee80211_device *ieee,
+					    u8 *dest)
 {
 	struct sk_buff *skb;
 	u8* tag;
@@ -939,7 +941,8 @@ struct sk_buff* ieee80211_assoc_resp(struct ieee80211_device *ieee, u8 *dest)
 	return skb;
 }
 
-struct sk_buff* ieee80211_auth_resp(struct ieee80211_device *ieee,int status, u8 *dest)
+static struct sk_buff *ieee80211_auth_resp(struct ieee80211_device *ieee,
+					   int status, u8 *dest)
 {
 	struct sk_buff *skb;
 	struct ieee80211_authentication *auth;
@@ -2110,13 +2113,7 @@ void ieee80211_rtl_stop_queue(struct ieee80211_device *ieee)
 inline void ieee80211_randomize_cell(struct ieee80211_device *ieee)
 {
 
-	get_random_bytes(ieee->current_network.bssid, ETH_ALEN);
-
-	/* an IBSS cell address must have the two less significant
-	 * bits of the first byte = 2
-	 */
-	ieee->current_network.bssid[0] &= ~0x01;
-	ieee->current_network.bssid[0] |= 0x02;
+	random_ether_addr(ieee->current_network.bssid);
 }
 
 /* called in user context only */
@@ -2808,9 +2805,7 @@ static int ieee80211_wpa_set_encryption(struct ieee80211_device *ieee,
 			       param->u.crypt.key_len);
 		return -EINVAL;
 	}
-	if (param->sta_addr[0] == 0xff && param->sta_addr[1] == 0xff &&
-	    param->sta_addr[2] == 0xff && param->sta_addr[3] == 0xff &&
-	    param->sta_addr[4] == 0xff && param->sta_addr[5] == 0xff) {
+	if (is_broadcast_ether_addr(param->sta_addr)) {
 		if (param->u.crypt.idx >= WEP_KEYS)
 			return -EINVAL;
 		crypt = &ieee->crypt[param->u.crypt.idx];
@@ -2949,14 +2944,9 @@ int ieee80211_wpa_supplicant_ioctl(struct ieee80211_device *ieee, struct iw_poin
 		goto out;
 	}
 
-	param = kmalloc(p->length, GFP_KERNEL);
-	if (param == NULL){
-		ret = -ENOMEM;
-		goto out;
-	}
-	if (copy_from_user(param, p->pointer, p->length)) {
-		kfree(param);
-		ret = -EFAULT;
+	param = memdup_user(p->pointer, p->length);
+	if (IS_ERR(param)) {
+		ret = PTR_ERR(param);
 		goto out;
 	}
 

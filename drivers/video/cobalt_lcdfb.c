@@ -167,7 +167,7 @@ static void lcd_clear(struct fb_info *info)
 	lcd_write_control(info, LCD_RESET);
 }
 
-static struct fb_fix_screeninfo cobalt_lcdfb_fix __devinitdata = {
+static struct fb_fix_screeninfo cobalt_lcdfb_fix = {
 	.id		= "cobalt-lcd",
 	.type		= FB_TYPE_TEXT,
 	.type_aux	= FB_AUX_TEXT_MDA,
@@ -331,7 +331,7 @@ static struct fb_ops cobalt_lcd_fbops = {
 	.fb_cursor	= cobalt_lcdfb_cursor,
 };
 
-static int __devinit cobalt_lcdfb_probe(struct platform_device *dev)
+static int cobalt_lcdfb_probe(struct platform_device *dev)
 {
 	struct fb_info *info;
 	struct resource *res;
@@ -348,7 +348,8 @@ static int __devinit cobalt_lcdfb_probe(struct platform_device *dev)
 	}
 
 	info->screen_size = resource_size(res);
-	info->screen_base = ioremap(res->start, info->screen_size);
+	info->screen_base = devm_ioremap(&dev->dev, res->start,
+					 info->screen_size);
 	info->fbops = &cobalt_lcd_fbops;
 	info->fix = cobalt_lcdfb_fix;
 	info->fix.smem_start = res->start;
@@ -359,7 +360,6 @@ static int __devinit cobalt_lcdfb_probe(struct platform_device *dev)
 
 	retval = register_framebuffer(info);
 	if (retval < 0) {
-		iounmap(info->screen_base);
 		framebuffer_release(info);
 		return retval;
 	}
@@ -368,19 +368,17 @@ static int __devinit cobalt_lcdfb_probe(struct platform_device *dev)
 
 	lcd_clear(info);
 
-	printk(KERN_INFO "fb%d: Cobalt server LCD frame buffer device\n",
-		info->node);
+	fb_info(info, "Cobalt server LCD frame buffer device\n");
 
 	return 0;
 }
 
-static int __devexit cobalt_lcdfb_remove(struct platform_device *dev)
+static int cobalt_lcdfb_remove(struct platform_device *dev)
 {
 	struct fb_info *info;
 
 	info = platform_get_drvdata(dev);
 	if (info) {
-		iounmap(info->screen_base);
 		unregister_framebuffer(info);
 		framebuffer_release(info);
 	}
@@ -390,25 +388,13 @@ static int __devexit cobalt_lcdfb_remove(struct platform_device *dev)
 
 static struct platform_driver cobalt_lcdfb_driver = {
 	.probe	= cobalt_lcdfb_probe,
-	.remove	= __devexit_p(cobalt_lcdfb_remove),
+	.remove	= cobalt_lcdfb_remove,
 	.driver	= {
 		.name	= "cobalt-lcd",
 		.owner	= THIS_MODULE,
 	},
 };
-
-static int __init cobalt_lcdfb_init(void)
-{
-	return platform_driver_register(&cobalt_lcdfb_driver);
-}
-
-static void __exit cobalt_lcdfb_exit(void)
-{
-	platform_driver_unregister(&cobalt_lcdfb_driver);
-}
-
-module_init(cobalt_lcdfb_init);
-module_exit(cobalt_lcdfb_exit);
+module_platform_driver(cobalt_lcdfb_driver);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Yoichi Yuasa");

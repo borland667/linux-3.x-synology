@@ -84,8 +84,6 @@ struct thread_info *current_thread_info(void)
 #define put_thread_info(ti)	put_task_struct((ti)->task)
 #endif /* __ASSEMBLY__ */
 
-#define	PREEMPT_ACTIVE	0x10000000
-
 /*
  * thread information flag bit numbers
  * - pending work-to-be-done flags are in LSW
@@ -97,7 +95,6 @@ struct thread_info *current_thread_info(void)
 #define TIF_NEED_RESCHED	3	/* rescheduling necessary */
 #define TIF_RESTORE_SIGMASK	4	/* restore signal mask in do_signal() */
 
-#define TIF_POLLING_NRFLAG	16	/* true if polling TIF_NEED_RESCHED */
 #define TIF_MEMDIE		17	/* OOM killer killed process */
 
 #define TIF_WORK_MASK		0x00007FFE /* work on irq/exception return */

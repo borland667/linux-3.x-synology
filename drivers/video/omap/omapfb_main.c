@@ -30,7 +30,9 @@
 #include <linux/uaccess.h>
 #include <linux/module.h>
 
-#include <plat/dma.h>
+#include <linux/omap-dma.h>
+
+#include <mach/hardware.h>
 
 #include "omapfb.h"
 #include "lcdc.h"
@@ -131,15 +133,6 @@ static void omapfb_rqueue_unlock(struct omapfb_device *fbdev)
  * LCD controller and LCD DMA
  * ---------------------------------------------------------------------------
  */
-/* Lookup table to map elem size to elem type. */
-static const int dma_elem_type[] = {
-	0,
-	OMAP_DMA_DATA_TYPE_S8,
-	OMAP_DMA_DATA_TYPE_S16,
-	0,
-	OMAP_DMA_DATA_TYPE_S32,
-};
-
 /*
  * Allocate resources needed for LCD controller and LCD DMA operations. Video
  * memory is allocated from system memory according to the virtual display
@@ -1609,7 +1602,7 @@ static int omapfb_find_ctrl(struct omapfb_device *fbdev)
 	char name[17];
 	int i;
 
-	conf = fbdev->dev->platform_data;
+	conf = dev_get_platdata(fbdev->dev);
 
 	fbdev->ctrl = NULL;
 
@@ -1681,7 +1674,7 @@ static int omapfb_do_probe(struct platform_device *pdev,
 		goto cleanup;
 	}
 
-	if (pdev->dev.platform_data == NULL) {
+	if (dev_get_platdata(&pdev->dev) == NULL) {
 		dev_err(&pdev->dev, "missing platform data\n");
 		r = -ENOENT;
 		goto cleanup;

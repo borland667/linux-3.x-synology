@@ -21,6 +21,14 @@
 
 #include <net/af_ieee802154.h>
 
+/* General MAC frame format:
+ *  2 bytes: Frame Control
+ *  1 byte:  Sequence Number
+ * 20 bytes: Addressing fields
+ * 14 bytes: Auxiliary Security Header
+ */
+#define MAC802154_FRAME_HARD_HEADER_LEN		(2 + 1 + 20 + 14)
+
 /* The following flags are used to indicate changed address settings from
  * the stack to the hardware.
  */
@@ -125,7 +133,7 @@ struct ieee802154_ops {
 
 /* Basic interface to register ieee802154 device */
 struct ieee802154_dev *
-ieee802154_alloc_device(size_t priv_data_lex, struct ieee802154_ops *ops);
+ieee802154_alloc_device(size_t priv_data_len, struct ieee802154_ops *ops);
 void ieee802154_free_device(struct ieee802154_dev *dev);
 int ieee802154_register_device(struct ieee802154_dev *dev);
 void ieee802154_unregister_device(struct ieee802154_dev *dev);

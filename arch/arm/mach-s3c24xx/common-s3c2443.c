@@ -132,7 +132,7 @@ static struct clk *clk_msysclk_sources[] = {
 	[3] = &clk_mpllref,
 };
 
-struct clksrc_clk clk_msysclk = {
+static struct clksrc_clk clk_msysclk = {
 	.clk	= {
 		.name		= "msysclk",
 		.parent		= &clk_xtal,
@@ -438,32 +438,32 @@ static struct clk init_clocks_off[] = {
 
 static struct clk init_clocks[] = {
 	{
-		.name		= "dma",
+		.name		= "dma.0",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA0,
 	}, {
-		.name		= "dma",
+		.name		= "dma.1",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA1,
 	}, {
-		.name		= "dma",
+		.name		= "dma.2",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA2,
 	}, {
-		.name		= "dma",
+		.name		= "dma.3",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA3,
 	}, {
-		.name		= "dma",
+		.name		= "dma.4",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA4,
 	}, {
-		.name		= "dma",
+		.name		= "dma.5",
 		.parent		= &clk_h,
 		.enable		= s3c2443_clkcon_enable_h,
 		.ctrlbit	= S3C2443_HCLKCON_DMA5,
@@ -559,7 +559,7 @@ static struct clk hsmmc1_clk = {
 
 static struct clk hsspi_clk = {
 	.name		= "spi",
-	.devname	= "s3c64xx-spi.0",
+	.devname	= "s3c2443-spi.0",
 	.parent		= &clk_p,
 	.enable		= s3c2443_clkcon_enable_p,
 	.ctrlbit	= S3C2443_PCLKCON_HSSPI,
@@ -633,7 +633,7 @@ static struct clk_lookup s3c2443_clk_lookup[] = {
 	CLKDEV_INIT(NULL, "clk_uart_baud2", &clk_p),
 	CLKDEV_INIT(NULL, "clk_uart_baud3", &clk_esys_uart.clk),
 	CLKDEV_INIT("s3c-sdhci.1", "mmc_busclk.0", &hsmmc1_clk),
-	CLKDEV_INIT("s3c64xx-spi.0", "spi_busclk0", &hsspi_clk),
+	CLKDEV_INIT("s3c2443-spi.0", "spi_busclk0", &hsspi_clk),
 };
 
 void __init s3c2443_common_init_clocks(int xtal, pll_fn get_mpll,

@@ -16,7 +16,7 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#include <plat/dsp.h>
+#include <linux/platform_data/dsp-omap.h>
 
 #include <linux/types.h>
 #include <linux/platform_device.h>
@@ -65,7 +65,6 @@ static struct class *bridge_class;
 static u32 driver_context;
 static s32 driver_major;
 static char *base_img;
-char *iva_img;
 static s32 shm_size = 0x500000;	/* 5 MB */
 static int tc_wordswapon;	/* Default value is always false */
 #ifdef CONFIG_TIDSPBRIDGE_RECOVERY
@@ -259,9 +258,10 @@ err:
 /* This function maps kernel space memory to user space memory. */
 static int bridge_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-	u32 status;
+	struct omap_dsp_platform_data *pdata =
+					omap_dspbridge_dev->dev.platform_data;
 
-	vma->vm_flags |= VM_RESERVED | VM_IO;
+	/* VM_IO | VM_DONTEXPAND | VM_DONTDUMP are set by remap_pfn_range() */
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	dev_dbg(bridge, "%s: vm filp %p start %lx end %lx page_prot %ulx "
@@ -269,13 +269,9 @@ static int bridge_mmap(struct file *filp, struct vm_area_struct *vma)
 		vma->vm_start, vma->vm_end, vma->vm_page_prot,
 		vma->vm_flags);
 
-	status = remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
-				 vma->vm_end - vma->vm_start,
-				 vma->vm_page_prot);
-	if (status != 0)
-		status = -EAGAIN;
-
-	return status;
+	return vm_iomap_memory(vma,
+			       pdata->phys_mempool_base,
+			       pdata->phys_mempool_size);
 }
 
 static const struct file_operations bridge_fops = {
@@ -333,7 +329,7 @@ static void bridge_recover(struct work_struct *work)
 	struct dev_object *dev;
 	struct cfg_devnode *dev_node;
 	if (atomic_read(&bridge_cref)) {
-		INIT_COMPLETION(bridge_comp);
+		reinit_completion(&bridge_comp);
 		while (!wait_for_completion_timeout(&bridge_comp,
 						msecs_to_jiffies(REC_TIMEOUT)))
 			pr_info("%s:%d handle(s) still opened\n",
@@ -349,7 +345,7 @@ static void bridge_recover(struct work_struct *work)
 
 void bridge_recover_schedule(void)
 {
-	INIT_COMPLETION(bridge_open_comp);
+	reinit_completion(&bridge_open_comp);
 	recover = true;
 	queue_work(bridge_rec_queue, &bridge_recovery_work);
 }
@@ -390,7 +386,7 @@ static int omap3_bridge_startup(struct platform_device *pdev)
 #ifdef CONFIG_TIDSPBRIDGE_RECOVERY
 	bridge_rec_queue = create_workqueue("bridge_rec_queue");
 	INIT_WORK(&bridge_recovery_work, bridge_recover);
-	INIT_COMPLETION(bridge_comp);
+	reinit_completion(&bridge_comp);
 #endif
 
 #ifdef CONFIG_PM
@@ -422,12 +418,11 @@ static int omap3_bridge_startup(struct platform_device *pdev)
 	drv_datap->tc_wordswapon = tc_wordswapon;
 
 	if (base_img) {
-		drv_datap->base_img = kmalloc(strlen(base_img) + 1, GFP_KERNEL);
+		drv_datap->base_img = kstrdup(base_img, GFP_KERNEL);
 		if (!drv_datap->base_img) {
 			err = -ENOMEM;
 			goto err2;
 		}
-		strncpy(drv_datap->base_img, base_img, strlen(base_img) + 1);
 	}
 
 	dev_set_drvdata(bridge, drv_datap);
@@ -471,7 +466,7 @@ err1:
 	return err;
 }
 
-static int __devinit omap34_xx_bridge_probe(struct platform_device *pdev)
+static int omap34_xx_bridge_probe(struct platform_device *pdev)
 {
 	int err;
 	dev_t dev = 0;
@@ -509,6 +504,7 @@ static int __devinit omap34_xx_bridge_probe(struct platform_device *pdev)
 	bridge_class = class_create(THIS_MODULE, "ti_bridge");
 	if (IS_ERR(bridge_class)) {
 		pr_err("%s: Error creating bridge class\n", __func__);
+		err = PTR_ERR(bridge_class);
 		goto err3;
 	}
 
@@ -527,7 +523,7 @@ err1:
 	return err;
 }
 
-static int __devexit omap34_xx_bridge_remove(struct platform_device *pdev)
+static int omap34_xx_bridge_remove(struct platform_device *pdev)
 {
 	dev_t devno;
 	int status = 0;
@@ -606,22 +602,12 @@ static struct platform_driver bridge_driver = {
 		   .name = "omap-dsp",
 		   },
 	.probe = omap34_xx_bridge_probe,
-	.remove = __devexit_p(omap34_xx_bridge_remove),
+	.remove = omap34_xx_bridge_remove,
 #ifdef CONFIG_PM
 	.suspend = bridge_suspend,
 	.resume = bridge_resume,
 #endif
 };
-
-static int __init bridge_init(void)
-{
-	return platform_driver_register(&bridge_driver);
-}
-
-static void __exit bridge_exit(void)
-{
-	platform_driver_unregister(&bridge_driver);
-}
 
 /* To remove all process resources before removing the process from the
  * process context list */
@@ -636,6 +622,4 @@ int drv_remove_all_resources(void *process_ctxt)
 	return status;
 }
 
-/* Bridge driver initialization and de-initialization functions */
-module_init(bridge_init);
-module_exit(bridge_exit);
+module_platform_driver(bridge_driver);

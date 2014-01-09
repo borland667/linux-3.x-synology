@@ -10,6 +10,7 @@
 #define BLK_BATCH_REQ	32
 
 extern struct kmem_cache *blk_requestq_cachep;
+extern struct kmem_cache *request_cachep;
 extern struct kobj_type blk_queue_ktype;
 extern struct ida blk_queue_ida;
 
@@ -18,6 +19,9 @@ static inline void __blk_get_queue(struct request_queue *q)
 	kobject_get(&q->kobj);
 }
 
+int blk_init_rl(struct request_list *rl, struct request_queue *q,
+		gfp_t gfp_mask);
+void blk_exit_rl(struct request_list *rl);
 void init_request_from_bio(struct request *req, struct bio *bio);
 void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
 			struct bio *bio);
@@ -31,15 +35,30 @@ bool __blk_end_bidi_request(struct request *rq, int error,
 			    unsigned int nr_bytes, unsigned int bidi_bytes);
 
 void blk_rq_timed_out_timer(unsigned long data);
+void blk_rq_check_expired(struct request *rq, unsigned long *next_timeout,
+			  unsigned int *next_set);
+void __blk_add_timer(struct request *req, struct list_head *timeout_list);
 void blk_delete_timer(struct request *);
 void blk_add_timer(struct request *);
-void __generic_unplug_device(struct request_queue *);
+
+
+bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
+			     struct bio *bio);
+bool bio_attempt_back_merge(struct request_queue *q, struct request *req,
+			    struct bio *bio);
+bool blk_attempt_plug_merge(struct request_queue *q, struct bio *bio,
+			    unsigned int *request_count);
+
+void blk_account_io_start(struct request *req, bool new_io);
+void blk_account_io_completion(struct request *req, unsigned int bytes);
+void blk_account_io_done(struct request *req);
 
 /*
  * Internal atomic flags for request handling
  */
 enum rq_atomic_flags {
 	REQ_ATOM_COMPLETE = 0,
+	REQ_ATOM_STARTED,
 };
 
 /*
@@ -59,7 +78,7 @@ static inline void blk_clear_rq_complete(struct request *rq)
 /*
  * Internal elevator interface
  */
-#define ELV_ON_HASH(rq)		(!hlist_unhashed(&(rq)->hash))
+#define ELV_ON_HASH(rq) hash_hashed(&(rq)->hash)
 
 void blk_insert_flush(struct request *rq);
 void blk_abort_flushes(struct request_queue *q);
@@ -94,7 +113,7 @@ static inline struct request *__elv_next_request(struct request_queue *q)
 			q->flush_queue_delayed = 1;
 			return NULL;
 		}
-		if (unlikely(blk_queue_dead(q)) ||
+		if (unlikely(blk_queue_dying(q)) ||
 		    !q->elevator->type->ops.elevator_dispatch_fn(q, 0))
 			return NULL;
 	}
@@ -143,6 +162,8 @@ int blk_try_merge(struct request *rq, struct bio *bio);
 
 void blk_queue_congestion_threshold(struct request_queue *q);
 
+void __blk_run_queue_uncond(struct request_queue *q);
+
 int blk_dev_init(void);
 
 
@@ -169,14 +190,13 @@ static inline int queue_congestion_off_threshold(struct request_queue *q)
  *
  *	a) it's attached to a gendisk, and
  *	b) the queue had IO stats enabled when this request was started, and
- *	c) it's a file system request or a discard request
+ *	c) it's a file system request
  */
 static inline int blk_do_io_stat(struct request *rq)
 {
 	return rq->rq_disk &&
 	       (rq->cmd_flags & REQ_IO_STAT) &&
-	       (rq->cmd_type == REQ_TYPE_FS ||
-	        (rq->cmd_flags & REQ_DISCARD));
+		(rq->cmd_type == REQ_TYPE_FS);
 }
 
 /*

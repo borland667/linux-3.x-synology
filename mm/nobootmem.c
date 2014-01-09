@@ -45,9 +45,9 @@ static void * __init __alloc_memory_core_early(int nid, u64 size, u64 align,
 	if (!addr)
 		return NULL;
 
+	memblock_reserve(addr, size);
 	ptr = phys_to_virt(addr);
 	memset(ptr, 0, size);
-	memblock_reserve(addr, size);
 	/*
 	 * The min_count is set to 0 so that bootmem allocated blocks
 	 * are never reported as leaks.
@@ -82,65 +82,71 @@ void __init free_bootmem_late(unsigned long addr, unsigned long size)
 
 static void __init __free_pages_memory(unsigned long start, unsigned long end)
 {
-	unsigned long i, start_aligned, end_aligned;
-	int order = ilog2(BITS_PER_LONG);
+	int order;
 
-	start_aligned = (start + (BITS_PER_LONG - 1)) & ~(BITS_PER_LONG - 1);
-	end_aligned = end & ~(BITS_PER_LONG - 1);
+	while (start < end) {
+		order = min(MAX_ORDER - 1UL, __ffs(start));
 
-	if (end_aligned <= start_aligned) {
-		for (i = start; i < end; i++)
-			__free_pages_bootmem(pfn_to_page(i), 0);
+		while (start + (1UL << order) > end)
+			order--;
 
-		return;
+		__free_pages_bootmem(pfn_to_page(start), order);
+
+		start += (1UL << order);
 	}
-
-	for (i = start; i < start_aligned; i++)
-		__free_pages_bootmem(pfn_to_page(i), 0);
-
-	for (i = start_aligned; i < end_aligned; i += BITS_PER_LONG)
-		__free_pages_bootmem(pfn_to_page(i), order);
-
-	for (i = end_aligned; i < end; i++)
-		__free_pages_bootmem(pfn_to_page(i), 0);
 }
 
-unsigned long __init free_low_memory_core_early(int nodeid)
+static unsigned long __init __free_memory_core(phys_addr_t start,
+				 phys_addr_t end)
+{
+	unsigned long start_pfn = PFN_UP(start);
+	unsigned long end_pfn = min_t(unsigned long,
+				      PFN_DOWN(end), max_low_pfn);
+
+	if (start_pfn > end_pfn)
+		return 0;
+
+	__free_pages_memory(start_pfn, end_pfn);
+
+	return end_pfn - start_pfn;
+}
+
+static unsigned long __init free_low_memory_core_early(void)
 {
 	unsigned long count = 0;
-	phys_addr_t start, end;
+	phys_addr_t start, end, size;
 	u64 i;
 
-	/* free reserved array temporarily so that it's treated as free area */
-	memblock_free_reserved_regions();
+	for_each_free_mem_range(i, MAX_NUMNODES, &start, &end, NULL)
+		count += __free_memory_core(start, end);
 
-	for_each_free_mem_range(i, MAX_NUMNODES, &start, &end, NULL) {
-		unsigned long start_pfn = PFN_UP(start);
-		unsigned long end_pfn = min_t(unsigned long,
-					      PFN_DOWN(end), max_low_pfn);
-		if (start_pfn < end_pfn) {
-			__free_pages_memory(start_pfn, end_pfn);
-			count += end_pfn - start_pfn;
-		}
-	}
+	/* free range that is used for reserved array if we allocate it */
+	size = get_allocated_memblock_reserved_regions_info(&start);
+	if (size)
+		count += __free_memory_core(start, start + size);
 
-	/* put region array back? */
-	memblock_reserve_reserved_regions();
 	return count;
 }
 
-/**
- * free_all_bootmem_node - release a node's free pages to the buddy allocator
- * @pgdat: node to be released
- *
- * Returns the number of pages actually released.
- */
-unsigned long __init free_all_bootmem_node(pg_data_t *pgdat)
-{
-	register_page_bootmem_info_node(pgdat);
+static int reset_managed_pages_done __initdata;
 
-	/* free_low_memory_core_early(MAX_NUMNODES) will be called later */
-	return 0;
+static inline void __init reset_node_managed_pages(pg_data_t *pgdat)
+{
+	struct zone *z;
+
+	if (reset_managed_pages_done)
+		return;
+	for (z = pgdat->node_zones; z < pgdat->node_zones + MAX_NR_ZONES; z++)
+		z->managed_pages = 0;
+}
+
+void __init reset_all_zones_managed_pages(void)
+{
+	struct pglist_data *pgdat;
+
+	for_each_online_pgdat(pgdat)
+		reset_node_managed_pages(pgdat);
+	reset_managed_pages_done = 1;
 }
 
 /**
@@ -150,14 +156,19 @@ unsigned long __init free_all_bootmem_node(pg_data_t *pgdat)
  */
 unsigned long __init free_all_bootmem(void)
 {
+	unsigned long pages;
+
+	reset_all_zones_managed_pages();
+
 	/*
 	 * We need to use MAX_NUMNODES instead of NODE_DATA(0)->node_id
 	 *  because in some case like Node0 doesn't have RAM installed
 	 *  low ram will be on Node1
-	 * Use MAX_NUMNODES will make sure all ranges in early_node_map[]
-	 *  will be used instead of only Node0 related
 	 */
-	return free_low_memory_core_early(MAX_NUMNODES);
+	pages = free_low_memory_core_early();
+	totalram_pages += pages;
+
+	return pages;
 }
 
 /**
@@ -274,7 +285,7 @@ void * __init __alloc_bootmem(unsigned long size, unsigned long align,
 	return ___alloc_bootmem(size, align, goal, limit);
 }
 
-static void * __init ___alloc_bootmem_node_nopanic(pg_data_t *pgdat,
+void * __init ___alloc_bootmem_node_nopanic(pg_data_t *pgdat,
 						   unsigned long size,
 						   unsigned long align,
 						   unsigned long goal,
@@ -376,6 +387,14 @@ void * __init __alloc_bootmem_low(unsigned long size, unsigned long align,
 				  unsigned long goal)
 {
 	return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
+}
+
+void * __init __alloc_bootmem_low_nopanic(unsigned long size,
+					  unsigned long align,
+					  unsigned long goal)
+{
+	return ___alloc_bootmem_nopanic(size, align, goal,
+					ARCH_LOW_ADDRESS_LIMIT);
 }
 
 /**

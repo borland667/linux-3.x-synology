@@ -13,14 +13,15 @@
 #include <linux/sched.h>
 #include <asm/pgtable.h>
 #include <asm/processor.h>
+#include <asm/sections.h>
 #include <asm/setup.h>
-#include "as-layout.h"
-#include "arch.h"
-#include "init.h"
-#include "kern.h"
-#include "kern_util.h"
-#include "mem_user.h"
-#include "os.h"
+#include <as-layout.h>
+#include <arch.h>
+#include <init.h>
+#include <kern.h>
+#include <kern_util.h>
+#include <mem_user.h>
+#include <os.h>
 
 #define DEFAULT_COMMAND_LINE "root=98:0"
 
@@ -234,7 +235,6 @@ static int panic_exit(struct notifier_block *self, unsigned long unused1,
 		      void *unused2)
 {
 	bust_spinlocks(1);
-	show_regs(&(current->thread.regs));
 	bust_spinlocks(0);
 	uml_exitcode = 1;
 	os_dump_core();

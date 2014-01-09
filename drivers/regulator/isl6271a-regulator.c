@@ -73,21 +73,8 @@ static struct regulator_ops isl_core_ops = {
 	.map_voltage	= regulator_map_voltage_linear,
 };
 
-static int isl6271a_get_fixed_voltage(struct regulator_dev *dev)
-{
-	int id = rdev_get_id(dev);
-	return (id == 1) ? 1100000 : 1300000;
-}
-
-static int isl6271a_list_fixed_voltage(struct regulator_dev *dev, unsigned selector)
-{
-	int id = rdev_get_id(dev);
-	return (id == 1) ? 1100000 : 1300000;
-}
-
 static struct regulator_ops isl_fixed_ops = {
-	.get_voltage	= isl6271a_get_fixed_voltage,
-	.list_voltage	= isl6271a_list_fixed_voltage,
+	.list_voltage	= regulator_list_voltage_linear,
 };
 
 static const struct regulator_desc isl_rd[] = {
@@ -107,6 +94,7 @@ static const struct regulator_desc isl_rd[] = {
 		.ops		= &isl_fixed_ops,
 		.type		= REGULATOR_VOLTAGE,
 		.owner		= THIS_MODULE,
+		.min_uV		= 1100000,
 	}, {
 		.name		= "LDO2",
 		.id		= 2,
@@ -114,16 +102,17 @@ static const struct regulator_desc isl_rd[] = {
 		.ops		= &isl_fixed_ops,
 		.type		= REGULATOR_VOLTAGE,
 		.owner		= THIS_MODULE,
+		.min_uV		= 1300000,
 	},
 };
 
-static int __devinit isl6271a_probe(struct i2c_client *i2c,
+static int isl6271a_probe(struct i2c_client *i2c,
 				     const struct i2c_device_id *id)
 {
 	struct regulator_config config = { };
-	struct regulator_init_data *init_data	= i2c->dev.platform_data;
+	struct regulator_init_data *init_data	= dev_get_platdata(&i2c->dev);
 	struct isl_pmic *pmic;
-	int err, i;
+	int i;
 
 	if (!i2c_check_functionality(i2c->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
@@ -141,34 +130,19 @@ static int __devinit isl6271a_probe(struct i2c_client *i2c,
 		if (i == 0)
 			config.init_data = init_data;
 		else
-			config.init_data = 0;
+			config.init_data = NULL;
 		config.driver_data = pmic;
 
-		pmic->rdev[i] = regulator_register(&isl_rd[i], &config);
+		pmic->rdev[i] = devm_regulator_register(&i2c->dev, &isl_rd[i],
+							&config);
 		if (IS_ERR(pmic->rdev[i])) {
 			dev_err(&i2c->dev, "failed to register %s\n", id->name);
-			err = PTR_ERR(pmic->rdev[i]);
-			goto error;
+			return PTR_ERR(pmic->rdev[i]);
 		}
 	}
 
 	i2c_set_clientdata(i2c, pmic);
 
-	return 0;
-
-error:
-	while (--i >= 0)
-		regulator_unregister(pmic->rdev[i]);
-	return err;
-}
-
-static int __devexit isl6271a_remove(struct i2c_client *i2c)
-{
-	struct isl_pmic *pmic = i2c_get_clientdata(i2c);
-	int i;
-
-	for (i = 0; i < 3; i++)
-		regulator_unregister(pmic->rdev[i]);
 	return 0;
 }
 
@@ -185,7 +159,6 @@ static struct i2c_driver isl6271a_i2c_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = isl6271a_probe,
-	.remove = __devexit_p(isl6271a_remove),
 	.id_table = isl6271a_id,
 };
 

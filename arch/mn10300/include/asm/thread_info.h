@@ -16,8 +16,6 @@
 
 #include <asm/page.h>
 
-#define PREEMPT_ACTIVE		0x10000000
-
 #ifdef CONFIG_4KSTACKS
 #define THREAD_SIZE		(4096)
 #define THREAD_SIZE_ORDER	(0)
@@ -123,7 +121,7 @@ static inline unsigned long current_stack_pointer(void)
 }
 
 #ifndef CONFIG_KGDB
-void arch_release_thread_info(struct thread_info *ti)
+void arch_release_thread_info(struct thread_info *ti);
 #endif
 #define get_thread_info(ti)	get_task_struct((ti)->task)
 #define put_thread_info(ti)	put_task_struct((ti)->task)
@@ -160,7 +158,6 @@ void arch_release_thread_info(struct thread_info *ti)
 #define _TIF_SIGPENDING		+(1 << TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	+(1 << TIF_NEED_RESCHED)
 #define _TIF_SINGLESTEP		+(1 << TIF_SINGLESTEP)
-#define _TIF_RESTORE_SIGMASK	+(1 << TIF_RESTORE_SIGMASK)
 #define _TIF_POLLING_NRFLAG	+(1 << TIF_POLLING_NRFLAG)
 
 #define _TIF_WORK_MASK		0x0000FFFE	/* work to do on interrupt/exception return */

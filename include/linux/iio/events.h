@@ -26,27 +26,13 @@ struct iio_event_data {
 
 #define IIO_GET_EVENT_FD_IOCTL _IOR('i', 0x90, int)
 
-enum iio_event_type {
-	IIO_EV_TYPE_THRESH,
-	IIO_EV_TYPE_MAG,
-	IIO_EV_TYPE_ROC,
-	IIO_EV_TYPE_THRESH_ADAPTIVE,
-	IIO_EV_TYPE_MAG_ADAPTIVE,
-};
-
-enum iio_event_direction {
-	IIO_EV_DIR_EITHER,
-	IIO_EV_DIR_RISING,
-	IIO_EV_DIR_FALLING,
-};
-
 /**
  * IIO_EVENT_CODE() - create event identifier
  * @chan_type:	Type of the channel. Should be one of enum iio_chan_type.
  * @diff:	Whether the event is for an differential channel or not.
  * @modifier:	Modifier for the channel. Should be one of enum iio_modifier.
  * @direction:	Direction of the event. One of enum iio_event_direction.
- * @type:	Type of the event. Should be one enum iio_event_type.
+ * @type:	Type of the event. Should be one of enum iio_event_type.
  * @chan:	Channel number for non-differential channels.
  * @chan1:	First channel number for differential channels.
  * @chan2:	Second channel number for differential channels.
@@ -69,7 +55,7 @@ enum iio_event_direction {
  * @chan_type:	Type of the channel. Should be one of enum iio_chan_type.
  * @number:	Channel number.
  * @modifier:	Modifier for the channel. Should be one of enum iio_modifier.
- * @type:	Type of the event. Should be one enum iio_event_type.
+ * @type:	Type of the event. Should be one of enum iio_event_type.
  * @direction:	Direction of the event. One of enum iio_event_direction.
  */
 
@@ -81,7 +67,7 @@ enum iio_event_direction {
  * IIO_UNMOD_EVENT_CODE() - create event identifier for unmodified channels
  * @chan_type:	Type of the channel. Should be one of enum iio_chan_type.
  * @number:	Channel number.
- * @type:	Type of the event. Should be one enum iio_event_type.
+ * @type:	Type of the event. Should be one of enum iio_event_type.
  * @direction:	Direction of the event. One of enum iio_event_direction.
  */
 

@@ -41,8 +41,6 @@ struct thread_info {
 
 #endif
 
-#define PREEMPT_ACTIVE		0x10000000
-
 #if defined(CONFIG_4KSTACKS)
 #define THREAD_SHIFT	12
 #else
@@ -206,6 +204,7 @@ static inline bool test_and_clear_restore_sigmask(void)
 	ti->status &= ~TS_RESTORE_SIGMASK;
 	return true;
 }
+
 #endif	/* !__ASSEMBLY__ */
 
 #endif /* __KERNEL__ */

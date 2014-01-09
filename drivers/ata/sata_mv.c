@@ -65,6 +65,8 @@
 #include <linux/mbus.h>
 #include <linux/bitops.h>
 #include <linux/gfp.h>
+#include <linux/of.h>
+#include <linux/of_irq.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
@@ -77,8 +79,8 @@
  * module options
  */
 
-static int msi;
 #ifdef CONFIG_PCI
+static int msi;
 module_param(msi, int, S_IRUGO);
 MODULE_PARM_DESC(msi, "Enable use of PCI MSI (0=off, 1=on)");
 #endif
@@ -551,10 +553,15 @@ struct mv_host_priv {
 	u32			irq_mask_offset;
 	u32			unmask_all_irqs;
 
-#if defined(CONFIG_HAVE_CLK)
+	/*
+	 * Needed on some devices that require their clocks to be enabled.
+	 * These are optional: if the platform device does not have any
+	 * clocks, they won't be used.  Also, if the underlying hardware
+	 * does not support the common clock framework (CONFIG_HAVE_CLK=n),
+	 * all the clock operations become no-ops (see clk.h).
+	 */
 	struct clk		*clk;
 	struct clk              **port_clks;
-#endif
 	/*
 	 * These consistent DMA memory pools give us guaranteed
 	 * alignment for hardware-accessed data structures,
@@ -650,12 +657,13 @@ static u8 mv_sff_check_status(struct ata_port *ap);
  * because we have to allow room for worst case splitting of
  * PRDs for 64K boundaries in mv_fill_sg().
  */
+#ifdef CONFIG_PCI
 static struct scsi_host_template mv5_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	.sg_tablesize		= MV_MAX_SG_CT / 2,
 	.dma_boundary		= MV_DMA_BOUNDARY,
 };
-
+#endif
 static struct scsi_host_template mv6_sht = {
 	ATA_NCQ_SHT(DRV_NAME),
 	.can_queue		= MV_MAX_Q_DEPTH - 1,
@@ -1250,7 +1258,7 @@ static void mv_dump_mem(void __iomem *start, unsigned bytes)
 	}
 }
 #endif
-
+#if defined(ATA_DEBUG) || defined(CONFIG_PCI)
 static void mv_dump_pci_cfg(struct pci_dev *pdev, unsigned bytes)
 {
 #ifdef ATA_DEBUG
@@ -1267,6 +1275,7 @@ static void mv_dump_pci_cfg(struct pci_dev *pdev, unsigned bytes)
 	}
 #endif
 }
+#endif
 static void mv_dump_all_regs(void __iomem *mmio_base, int port,
 			     struct pci_dev *pdev)
 {
@@ -4026,11 +4035,9 @@ static int mv_platform_probe(struct platform_device *pdev)
 	struct ata_host *host;
 	struct mv_host_priv *hpriv;
 	struct resource *res;
-	int n_ports = 0;
+	int n_ports = 0, irq = 0;
 	int rc;
-#if defined(CONFIG_HAVE_CLK)
 	int port;
-#endif
 
 	ata_print_version_once(&pdev->dev, DRV_VERSION);
 
@@ -4050,21 +4057,25 @@ static int mv_platform_probe(struct platform_device *pdev)
 		return -EINVAL;
 
 	/* allocate host */
-	mv_platform_data = pdev->dev.platform_data;
-	n_ports = mv_platform_data->n_ports;
+	if (pdev->dev.of_node) {
+		of_property_read_u32(pdev->dev.of_node, "nr-ports", &n_ports);
+		irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
+	} else {
+		mv_platform_data = dev_get_platdata(&pdev->dev);
+		n_ports = mv_platform_data->n_ports;
+		irq = platform_get_irq(pdev, 0);
+	}
 
 	host = ata_host_alloc_pinfo(&pdev->dev, ppi, n_ports);
 	hpriv = devm_kzalloc(&pdev->dev, sizeof(*hpriv), GFP_KERNEL);
 
 	if (!host || !hpriv)
 		return -ENOMEM;
-#if defined(CONFIG_HAVE_CLK)
 	hpriv->port_clks = devm_kzalloc(&pdev->dev,
 					sizeof(struct clk *) * n_ports,
 					GFP_KERNEL);
 	if (!hpriv->port_clks)
 		return -ENOMEM;
-#endif
 	host->private_data = hpriv;
 	hpriv->n_ports = n_ports;
 	hpriv->board_idx = chip_soc;
@@ -4074,7 +4085,6 @@ static int mv_platform_probe(struct platform_device *pdev)
 				   resource_size(res));
 	hpriv->base -= SATAHC0_REG_BASE;
 
-#if defined(CONFIG_HAVE_CLK)
 	hpriv->clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(hpriv->clk))
 		dev_notice(&pdev->dev, "cannot get optional clkdev\n");
@@ -4088,7 +4098,6 @@ static int mv_platform_probe(struct platform_device *pdev)
 		if (!IS_ERR(hpriv->port_clks[port]))
 			clk_prepare_enable(hpriv->port_clks[port]);
 	}
-#endif
 
 	/*
 	 * (Re-)program MBUS remapping windows if we are asked to.
@@ -4109,13 +4118,11 @@ static int mv_platform_probe(struct platform_device *pdev)
 	dev_info(&pdev->dev, "slots %u ports %d\n",
 		 (unsigned)MV_MAX_Q_DEPTH, host->n_ports);
 
-	rc = ata_host_activate(host, platform_get_irq(pdev, 0), mv_interrupt,
-			       IRQF_SHARED, &mv6_sht);
+	rc = ata_host_activate(host, irq, mv_interrupt, IRQF_SHARED, &mv6_sht);
 	if (!rc)
 		return 0;
 
 err:
-#if defined(CONFIG_HAVE_CLK)
 	if (!IS_ERR(hpriv->clk)) {
 		clk_disable_unprepare(hpriv->clk);
 		clk_put(hpriv->clk);
@@ -4126,7 +4133,6 @@ err:
 			clk_put(hpriv->port_clks[port]);
 		}
 	}
-#endif
 
 	return rc;
 }
@@ -4139,16 +4145,13 @@ err:
  *      A platform bus SATA device has been unplugged. Perform the needed
  *      cleanup. Also called on module unload for any active devices.
  */
-static int __devexit mv_platform_remove(struct platform_device *pdev)
+static int mv_platform_remove(struct platform_device *pdev)
 {
 	struct ata_host *host = platform_get_drvdata(pdev);
-#if defined(CONFIG_HAVE_CLK)
 	struct mv_host_priv *hpriv = host->private_data;
 	int port;
-#endif
 	ata_host_detach(host);
 
-#if defined(CONFIG_HAVE_CLK)
 	if (!IS_ERR(hpriv->clk)) {
 		clk_disable_unprepare(hpriv->clk);
 		clk_put(hpriv->clk);
@@ -4159,7 +4162,6 @@ static int __devexit mv_platform_remove(struct platform_device *pdev)
 			clk_put(hpriv->port_clks[port]);
 		}
 	}
-#endif
 	return 0;
 }
 
@@ -4205,15 +4207,24 @@ static int mv_platform_resume(struct platform_device *pdev)
 #define mv_platform_resume NULL
 #endif
 
+#ifdef CONFIG_OF
+static struct of_device_id mv_sata_dt_ids[] = {
+	{ .compatible = "marvell,orion-sata", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, mv_sata_dt_ids);
+#endif
+
 static struct platform_driver mv_platform_driver = {
-	.probe			= mv_platform_probe,
-	.remove			= __devexit_p(mv_platform_remove),
-	.suspend		= mv_platform_suspend,
-	.resume			= mv_platform_resume,
-	.driver			= {
-				   .name = DRV_NAME,
-				   .owner = THIS_MODULE,
-				  },
+	.probe		= mv_platform_probe,
+	.remove		= mv_platform_remove,
+	.suspend	= mv_platform_suspend,
+	.resume		= mv_platform_resume,
+	.driver		= {
+		.name = DRV_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(mv_sata_dt_ids),
+	},
 };
 
 
@@ -4409,9 +4420,6 @@ static int mv_pci_device_resume(struct pci_dev *pdev)
 }
 #endif
 #endif
-
-static int mv_platform_probe(struct platform_device *pdev);
-static int __devexit mv_platform_remove(struct platform_device *pdev);
 
 static int __init mv_init(void)
 {

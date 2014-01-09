@@ -27,6 +27,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/errno.h>
@@ -40,8 +42,6 @@
 #include <linux/interrupt.h>
 #include <linux/completion.h>
 #include <linux/workqueue.h>
-
-#include <mach/clk.h>
 
 #include <crypto/scatterwalk.h>
 #include <crypto/aes.h>
@@ -201,8 +201,6 @@ static void aes_workqueue_handler(struct work_struct *work);
 static DECLARE_WORK(aes_work, aes_workqueue_handler);
 static struct workqueue_struct *aes_wq;
 
-extern unsigned long long tegra_chip_uid(void);
-
 static inline u32 aes_readl(struct tegra_aes_dev *dd, u32 offset)
 {
 	return readl(dd->io_base + offset);
@@ -270,14 +268,14 @@ static int aes_start_crypt(struct tegra_aes_dev *dd, u32 in_addr, u32 out_addr,
 	aes_writel(dd, value, TEGRA_AES_SECURE_INPUT_SELECT);
 
 	aes_writel(dd, out_addr, TEGRA_AES_SECURE_DEST_ADDR);
-	INIT_COMPLETION(dd->op_complete);
+	reinit_completion(&dd->op_complete);
 
 	for (i = 0; i < AES_HW_MAX_ICQ_LENGTH - 1; i++) {
 		do {
 			value = aes_readl(dd, TEGRA_AES_INTR_STATUS);
 			eng_busy = value & TEGRA_AES_ENGINE_BUSY_FIELD;
 			icq_empty = value & TEGRA_AES_ICQ_EMPTY_FIELD;
-		} while (eng_busy & (!icq_empty));
+		} while (eng_busy && !icq_empty);
 		aes_writel(dd, cmdq[i], TEGRA_AES_ICMDQUE_WR);
 	}
 
@@ -367,7 +365,7 @@ static int aes_set_key(struct tegra_aes_dev *dd)
 		eng_busy = value & TEGRA_AES_ENGINE_BUSY_FIELD;
 		icq_empty = value & TEGRA_AES_ICQ_EMPTY_FIELD;
 		dma_busy = value & TEGRA_AES_DMA_BUSY_FIELD;
-	} while (eng_busy & (!icq_empty) & dma_busy);
+	} while (eng_busy && !icq_empty && dma_busy);
 
 	/* settable command to get key into internal registers */
 	value = CMD_SETTABLE << CMDQ_OPCODE_SHIFT |
@@ -381,7 +379,7 @@ static int aes_set_key(struct tegra_aes_dev *dd)
 		value = aes_readl(dd, TEGRA_AES_INTR_STATUS);
 		eng_busy = value & TEGRA_AES_ENGINE_BUSY_FIELD;
 		icq_empty = value & TEGRA_AES_ICQ_EMPTY_FIELD;
-	} while (eng_busy & (!icq_empty));
+	} while (eng_busy && !icq_empty);
 
 	return 0;
 }
@@ -572,7 +570,7 @@ static void aes_workqueue_handler(struct work_struct *work)
 	struct tegra_aes_dev *dd = aes_dev;
 	int ret;
 
-	ret = clk_enable(dd->aes_clk);
+	ret = clk_prepare_enable(dd->aes_clk);
 	if (ret)
 		BUG_ON("clock enable failed");
 
@@ -581,7 +579,7 @@ static void aes_workqueue_handler(struct work_struct *work)
 		ret = tegra_aes_handle_req(dd);
 	} while (!ret);
 
-	clk_disable(dd->aes_clk);
+	clk_disable_unprepare(dd->aes_clk);
 }
 
 static irqreturn_t aes_irq(int irq, void *dev_id)
@@ -673,9 +671,11 @@ static int tegra_aes_get_random(struct crypto_rng *tfm, u8 *rdata,
 	/* take mutex to access the aes hw */
 	mutex_lock(&aes_lock);
 
-	ret = clk_enable(dd->aes_clk);
-	if (ret)
+	ret = clk_prepare_enable(dd->aes_clk);
+	if (ret) {
+		mutex_unlock(&aes_lock);
 		return ret;
+	}
 
 	ctx->dd = dd;
 	dd->ctx = ctx;
@@ -700,7 +700,7 @@ static int tegra_aes_get_random(struct crypto_rng *tfm, u8 *rdata,
 	}
 
 out:
-	clk_disable(dd->aes_clk);
+	clk_disable_unprepare(dd->aes_clk);
 	mutex_unlock(&aes_lock);
 
 	dev_dbg(dd->dev, "%s: done\n", __func__);
@@ -713,13 +713,12 @@ static int tegra_aes_rng_reset(struct crypto_rng *tfm, u8 *seed,
 	struct tegra_aes_dev *dd = aes_dev;
 	struct tegra_aes_ctx *ctx = &rng_ctx;
 	struct tegra_aes_slot *key_slot;
-	struct timespec ts;
 	int ret = 0;
-	u64 nsec, tmp[2];
+	u8 tmp[16]; /* 16 bytes = 128 bits of entropy */
 	u8 *dt;
 
 	if (!ctx || !dd) {
-		dev_err(dd->dev, "ctx=0x%x, dd=0x%x\n",
+		pr_err("ctx=0x%x, dd=0x%x\n",
 			(unsigned int)ctx, (unsigned int)dd);
 		return -EINVAL;
 	}
@@ -758,9 +757,11 @@ static int tegra_aes_rng_reset(struct crypto_rng *tfm, u8 *seed,
 
 	dd->flags = FLAGS_ENCRYPT | FLAGS_RNG;
 
-	ret = clk_enable(dd->aes_clk);
-	if (ret)
+	ret = clk_prepare_enable(dd->aes_clk);
+	if (ret) {
+		mutex_unlock(&aes_lock);
 		return ret;
+	}
 
 	aes_set_key(dd);
 
@@ -776,19 +777,13 @@ static int tegra_aes_rng_reset(struct crypto_rng *tfm, u8 *seed,
 	if (dd->ivlen >= (2 * DEFAULT_RNG_BLK_SZ + AES_KEYSIZE_128)) {
 		dt = dd->iv + DEFAULT_RNG_BLK_SZ + AES_KEYSIZE_128;
 	} else {
-		getnstimeofday(&ts);
-		nsec = timespec_to_ns(&ts);
-		do_div(nsec, 1000);
-		nsec ^= dd->ctr << 56;
-		dd->ctr++;
-		tmp[0] = nsec;
-		tmp[1] = tegra_chip_uid();
-		dt = (u8 *)tmp;
+		get_random_bytes(tmp, sizeof(tmp));
+		dt = tmp;
 	}
 	memcpy(dd->dt, dt, DEFAULT_RNG_BLK_SZ);
 
 out:
-	clk_disable(dd->aes_clk);
+	clk_disable_unprepare(dd->aes_clk);
 	mutex_unlock(&aes_lock);
 
 	dev_dbg(dd->dev, "%s: done\n", __func__);
@@ -802,7 +797,7 @@ static int tegra_aes_cra_init(struct crypto_tfm *tfm)
 	return 0;
 }
 
-void tegra_aes_cra_exit(struct crypto_tfm *tfm)
+static void tegra_aes_cra_exit(struct crypto_tfm *tfm)
 {
 	struct tegra_aes_ctx *ctx =
 		crypto_ablkcipher_ctx((struct crypto_ablkcipher *)tfm);
@@ -922,7 +917,7 @@ static int tegra_aes_probe(struct platform_device *pdev)
 	}
 
 	/* Initialize the vde clock */
-	dd->aes_clk = clk_get(dev, "vde");
+	dd->aes_clk = devm_clk_get(dev, "vde");
 	if (IS_ERR(dd->aes_clk)) {
 		dev_err(dev, "iclock intialization failed.\n");
 		err = -ENODEV;
@@ -969,6 +964,7 @@ static int tegra_aes_probe(struct platform_device *pdev)
 	aes_wq = alloc_workqueue("tegra_aes_wq", WQ_HIGHPRI | WQ_UNBOUND, 1);
 	if (!aes_wq) {
 		dev_err(dev, "alloc_workqueue failed\n");
+		err = -ENOMEM;
 		goto out;
 	}
 
@@ -1004,8 +1000,6 @@ static int tegra_aes_probe(struct platform_device *pdev)
 
 	aes_dev = dd;
 	for (i = 0; i < ARRAY_SIZE(algs); i++) {
-		INIT_LIST_HEAD(&algs[i].cra_list);
-
 		algs[i].cra_priority = 300;
 		algs[i].cra_ctxsize = sizeof(struct tegra_aes_ctx);
 		algs[i].cra_module = THIS_MODULE;
@@ -1032,8 +1026,6 @@ out:
 	if (dd->buf_out)
 		dma_free_coherent(dev, AES_HW_DMA_BUFFER_SIZE_BYTES,
 			dd->buf_out, dd->dma_buf_out);
-	if (IS_ERR(dd->aes_clk))
-		clk_put(dd->aes_clk);
 	if (aes_wq)
 		destroy_workqueue(aes_wq);
 	spin_lock(&list_lock);
@@ -1046,7 +1038,7 @@ out:
 	return err;
 }
 
-static int __devexit tegra_aes_remove(struct platform_device *pdev)
+static int tegra_aes_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct tegra_aes_dev *dd = platform_get_drvdata(pdev);
@@ -1067,13 +1059,12 @@ static int __devexit tegra_aes_remove(struct platform_device *pdev)
 			  dd->buf_in, dd->dma_buf_in);
 	dma_free_coherent(dev, AES_HW_DMA_BUFFER_SIZE_BYTES,
 			  dd->buf_out, dd->dma_buf_out);
-	clk_put(dd->aes_clk);
 	aes_dev = NULL;
 
 	return 0;
 }
 
-static struct of_device_id tegra_aes_of_match[] __devinitdata = {
+static struct of_device_id tegra_aes_of_match[] = {
 	{ .compatible = "nvidia,tegra20-aes", },
 	{ .compatible = "nvidia,tegra30-aes", },
 	{ },
@@ -1081,7 +1072,7 @@ static struct of_device_id tegra_aes_of_match[] __devinitdata = {
 
 static struct platform_driver tegra_aes_driver = {
 	.probe  = tegra_aes_probe,
-	.remove = __devexit_p(tegra_aes_remove),
+	.remove = tegra_aes_remove,
 	.driver = {
 		.name   = "tegra-aes",
 		.owner  = THIS_MODULE,

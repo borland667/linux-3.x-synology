@@ -50,7 +50,7 @@
 #include <linux/slab.h>
 
 /* Steal the hardware definitions from the bttv driver. */
-#include "../media/video/bt8xx/bt848.h"
+#include "../media/pci/bt8xx/bt848.h"
 
 
 #define BT8XXGPIO_NR_GPIOS		24 /* We have 24 GPIO pins */
@@ -228,7 +228,6 @@ static int bt8xxgpio_probe(struct pci_dev *dev,
 err_release_mem:
 	release_mem_region(pci_resource_start(dev, 0),
 			   pci_resource_len(dev, 0));
-	pci_set_drvdata(dev, NULL);
 err_disable:
 	pci_disable_device(dev);
 err_freebg:
@@ -252,7 +251,6 @@ static void bt8xxgpio_remove(struct pci_dev *pdev)
 			   pci_resource_len(pdev, 0));
 	pci_disable_device(pdev);
 
-	pci_set_drvdata(pdev, NULL);
 	kfree(bg);
 }
 
@@ -286,7 +284,7 @@ static int bt8xxgpio_resume(struct pci_dev *pdev)
 	unsigned long flags;
 	int err;
 
-	pci_set_power_state(pdev, 0);
+	pci_set_power_state(pdev, PCI_D0);
 	err = pci_enable_device(pdev);
 	if (err)
 		return err;
@@ -310,7 +308,7 @@ static int bt8xxgpio_resume(struct pci_dev *pdev)
 #define bt8xxgpio_resume NULL
 #endif /* CONFIG_PM */
 
-static struct pci_device_id bt8xxgpio_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(bt8xxgpio_pci_tbl) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT848) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT849) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT878) },

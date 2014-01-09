@@ -22,6 +22,8 @@
 #include <asm/prom.h>
 #include <asm/pci-bridge.h>
 
+#include <asm-generic/pci-dma-compat.h>
+
 #define PCIBIOS_MIN_IO		0x1000
 #define PCIBIOS_MIN_MEM		0x10000000
 
@@ -125,8 +127,6 @@ extern void of_scan_pci_bridge(struct device_node *node,
 extern void of_scan_bus(struct device_node *node, struct pci_bus *bus);
 extern void of_rescan_bus(struct device_node *node, struct pci_bus *bus);
 
-extern int pci_read_irq_line(struct pci_dev *dev);
-
 extern int pci_bus_find_capability(struct pci_bus *bus,
 						unsigned int devfn, int cap);
 
@@ -150,8 +150,6 @@ extern void __init xilinx_pci_init(void);
 #else
 static inline void __init xilinx_pci_init(void) { return; }
 #endif
-
-#include <asm-generic/pci-dma-compat.h>
 
 #endif	/* __KERNEL__ */
 #endif /* __ASM_MICROBLAZE_PCI_H */

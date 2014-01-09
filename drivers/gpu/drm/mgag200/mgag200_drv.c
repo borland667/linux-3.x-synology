@@ -10,12 +10,11 @@
  */
 #include <linux/module.h>
 #include <linux/console.h>
-#include "drmP.h"
-#include "drm.h"
+#include <drm/drmP.h>
 
 #include "mgag200_drv.h"
 
-#include "drm_pciids.h"
+#include <drm/drm_pciids.h>
 
 /*
  * This is the generic driver code. This binds the driver to the drm core,
@@ -47,6 +46,9 @@ static void mgag200_kick_out_firmware_fb(struct pci_dev *pdev)
 	bool primary = false;
 
 	ap = alloc_apertures(1);
+	if (!ap)
+		return;
+
 	ap->ranges[0].base = pci_resource_start(pdev, 0);
 	ap->ranges[0].size = pci_resource_len(pdev, 0);
 
@@ -58,8 +60,7 @@ static void mgag200_kick_out_firmware_fb(struct pci_dev *pdev)
 }
 
 
-static int __devinit
-mga_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+static int mga_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	mgag200_kick_out_firmware_fb(pdev);
 
@@ -80,12 +81,14 @@ static const struct file_operations mgag200_driver_fops = {
 	.unlocked_ioctl = drm_ioctl,
 	.mmap = mgag200_mmap,
 	.poll = drm_poll,
-	.fasync = drm_fasync,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = drm_compat_ioctl,
+#endif
 	.read = drm_read,
 };
 
 static struct drm_driver driver = {
-	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_USE_MTRR,
+	.driver_features = DRIVER_GEM | DRIVER_MODESET,
 	.load = mgag200_driver_load,
 	.unload = mgag200_driver_unload,
 	.fops = &mgag200_driver_fops,
@@ -96,11 +99,10 @@ static struct drm_driver driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
-	.gem_init_object = mgag200_gem_init_object,
 	.gem_free_object = mgag200_gem_free_object,
 	.dumb_create = mgag200_dumb_create,
 	.dumb_map_offset = mgag200_dumb_mmap_offset,
-	.dumb_destroy = mgag200_dumb_destroy,
+	.dumb_destroy = drm_gem_dumb_destroy,
 };
 
 static struct pci_driver mgag200_pci_driver = {

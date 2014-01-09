@@ -2,12 +2,9 @@
  * This file contains tcm implementation using v4 configfs fabric infrastructure
  * for QLogic target mode HBAs
  *
- * ?? Copyright 2010-2011 RisingTide Systems LLC.
+ * (c) Copyright 2010-2013 Datera, Inc.
  *
- * Licensed to the Linux Foundation under the General Public License (GPL)
- * version 2.
- *
- * Author: Nicholas A. Bellinger <nab@risingtidesystems.com>
+ * Author: Nicholas A. Bellinger <nab@daterainc.com>
  *
  * tcm_qla2xxx_parse_wwn() and tcm_qla2xxx_format_wwn() contains code from
  * the TCM_FC / Open-FCoE.org fabric module.
@@ -37,8 +34,6 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/configfs.h>
-#include <linux/ctype.h>
-#include <linux/string.h>
 #include <linux/ctype.h>
 #include <asm/unaligned.h>
 #include <scsi/scsi.h>
@@ -239,7 +234,7 @@ static char *tcm_qla2xxx_get_fabric_wwn(struct se_portal_group *se_tpg)
 				struct tcm_qla2xxx_tpg, se_tpg);
 	struct tcm_qla2xxx_lport *lport = tpg->lport;
 
-	return &lport->lport_name[0];
+	return lport->lport_naa_name;
 }
 
 static char *tcm_qla2xxx_npiv_get_fabric_wwn(struct se_portal_group *se_tpg)
@@ -335,7 +330,7 @@ static int tcm_qla2xxx_check_demo_mode(struct se_portal_group *se_tpg)
 	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,
 				struct tcm_qla2xxx_tpg, se_tpg);
 
-	return QLA_TPG_ATTRIB(tpg)->generate_node_acls;
+	return tpg->tpg_attrib.generate_node_acls;
 }
 
 static int tcm_qla2xxx_check_demo_mode_cache(struct se_portal_group *se_tpg)
@@ -343,7 +338,7 @@ static int tcm_qla2xxx_check_demo_mode_cache(struct se_portal_group *se_tpg)
 	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,
 				struct tcm_qla2xxx_tpg, se_tpg);
 
-	return QLA_TPG_ATTRIB(tpg)->cache_dynamic_acls;
+	return tpg->tpg_attrib.cache_dynamic_acls;
 }
 
 static int tcm_qla2xxx_check_demo_write_protect(struct se_portal_group *se_tpg)
@@ -351,7 +346,7 @@ static int tcm_qla2xxx_check_demo_write_protect(struct se_portal_group *se_tpg)
 	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,
 				struct tcm_qla2xxx_tpg, se_tpg);
 
-	return QLA_TPG_ATTRIB(tpg)->demo_mode_write_protect;
+	return tpg->tpg_attrib.demo_mode_write_protect;
 }
 
 static int tcm_qla2xxx_check_prod_write_protect(struct se_portal_group *se_tpg)
@@ -359,7 +354,15 @@ static int tcm_qla2xxx_check_prod_write_protect(struct se_portal_group *se_tpg)
 	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,
 				struct tcm_qla2xxx_tpg, se_tpg);
 
-	return QLA_TPG_ATTRIB(tpg)->prod_mode_write_protect;
+	return tpg->tpg_attrib.prod_mode_write_protect;
+}
+
+static int tcm_qla2xxx_check_demo_mode_login_only(struct se_portal_group *se_tpg)
+{
+	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,
+				struct tcm_qla2xxx_tpg, se_tpg);
+
+	return tpg->tpg_attrib.demo_mode_login_only;
 }
 
 static struct se_node_acl *tcm_qla2xxx_alloc_fabric_acl(
@@ -369,7 +372,7 @@ static struct se_node_acl *tcm_qla2xxx_alloc_fabric_acl(
 
 	nacl = kzalloc(sizeof(struct tcm_qla2xxx_nacl), GFP_KERNEL);
 	if (!nacl) {
-		pr_err("Unable to alocate struct tcm_qla2xxx_nacl\n");
+		pr_err("Unable to allocate struct tcm_qla2xxx_nacl\n");
 		return NULL;
 	}
 
@@ -466,8 +469,7 @@ static int tcm_qla2xxx_shutdown_session(struct se_session *se_sess)
 	vha = sess->vha;
 
 	spin_lock_irqsave(&vha->hw->hardware_lock, flags);
-	sess->tearing_down = 1;
-	target_splice_sess_cmd_list(se_sess);
+	target_sess_cmd_list_set_waiting(se_sess);
 	spin_unlock_irqrestore(&vha->hw->hardware_lock, flags);
 
 	return 1;
@@ -492,38 +494,13 @@ static u32 tcm_qla2xxx_sess_get_index(struct se_session *se_sess)
 	return 0;
 }
 
-/*
- * The LIO target core uses DMA_TO_DEVICE to mean that data is going
- * to the target (eg handling a WRITE) and DMA_FROM_DEVICE to mean
- * that data is coming from the target (eg handling a READ).  However,
- * this is just the opposite of what we have to tell the DMA mapping
- * layer -- eg when handling a READ, the HBA will have to DMA the data
- * out of memory so it can send it to the initiator, which means we
- * need to use DMA_TO_DEVICE when we map the data.
- */
-static enum dma_data_direction tcm_qla2xxx_mapping_dir(struct se_cmd *se_cmd)
-{
-	if (se_cmd->se_cmd_flags & SCF_BIDI)
-		return DMA_BIDIRECTIONAL;
-
-	switch (se_cmd->data_direction) {
-	case DMA_TO_DEVICE:
-		return DMA_FROM_DEVICE;
-	case DMA_FROM_DEVICE:
-		return DMA_TO_DEVICE;
-	case DMA_NONE:
-	default:
-		return DMA_NONE;
-	}
-}
-
 static int tcm_qla2xxx_write_pending(struct se_cmd *se_cmd)
 {
 	struct qla_tgt_cmd *cmd = container_of(se_cmd,
 				struct qla_tgt_cmd, se_cmd);
 
 	cmd->bufflen = se_cmd->data_length;
-	cmd->dma_data_direction = tcm_qla2xxx_mapping_dir(se_cmd);
+	cmd->dma_data_direction = target_reverse_dma_direction(se_cmd);
 
 	cmd->sg_cnt = se_cmd->t_data_nents;
 	cmd->sg = se_cmd->t_data_sg;
@@ -600,28 +577,15 @@ static int tcm_qla2xxx_handle_cmd(scsi_qla_host_t *vha, struct qla_tgt_cmd *cmd,
 		return -EINVAL;
 	}
 
-	target_submit_cmd(se_cmd, se_sess, cdb, &cmd->sense_buffer[0],
+	return target_submit_cmd(se_cmd, se_sess, cdb, &cmd->sense_buffer[0],
 				cmd->unpacked_lun, data_length, fcp_task_attr,
 				data_dir, flags);
-	return 0;
 }
 
-static void tcm_qla2xxx_do_rsp(struct work_struct *work)
+static void tcm_qla2xxx_handle_data_work(struct work_struct *work)
 {
 	struct qla_tgt_cmd *cmd = container_of(work, struct qla_tgt_cmd, work);
-	/*
-	 * Dispatch ->queue_status from workqueue process context
-	 */
-	transport_generic_request_failure(&cmd->se_cmd);
-}
 
-/*
- * Called from qla_target.c:qlt_do_ctio_completion()
- */
-static int tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
-{
-	struct se_cmd *se_cmd = &cmd->se_cmd;
-	unsigned long flags;
 	/*
 	 * Ensure that the complete FCP WRITE payload has been received.
 	 * Otherwise return an exception via CHECK_CONDITION status.
@@ -631,24 +595,26 @@ static int tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
 		 * Check if se_cmd has already been aborted via LUN_RESET, and
 		 * waiting upon completion in tcm_qla2xxx_write_pending_status()
 		 */
-		spin_lock_irqsave(&se_cmd->t_state_lock, flags);
-		if (se_cmd->transport_state & CMD_T_ABORTED) {
-			spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
-			complete(&se_cmd->t_transport_stop_comp);
-			return 0;
+		if (cmd->se_cmd.transport_state & CMD_T_ABORTED) {
+			complete(&cmd->se_cmd.t_transport_stop_comp);
+			return;
 		}
-		spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
 
-		se_cmd->scsi_sense_reason = TCM_CHECK_CONDITION_ABORT_CMD;
-		INIT_WORK(&cmd->work, tcm_qla2xxx_do_rsp);
-		queue_work(tcm_qla2xxx_free_wq, &cmd->work);
-		return 0;
+		transport_generic_request_failure(&cmd->se_cmd,
+						  TCM_CHECK_CONDITION_ABORT_CMD);
+		return;
 	}
-	/*
-	 * We now tell TCM to queue this WRITE CDB with TRANSPORT_PROCESS_WRITE
-	 * status to the backstore processing thread.
-	 */
-	return transport_generic_handle_data(&cmd->se_cmd);
+
+	return target_execute_cmd(&cmd->se_cmd);
+}
+
+/*
+ * Called from qla_target.c:qlt_do_ctio_completion()
+ */
+static void tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
+{
+	INIT_WORK(&cmd->work, tcm_qla2xxx_handle_data_work);
+	queue_work(tcm_qla2xxx_free_wq, &cmd->work);
 }
 
 /*
@@ -670,7 +636,7 @@ static int tcm_qla2xxx_queue_data_in(struct se_cmd *se_cmd)
 				struct qla_tgt_cmd, se_cmd);
 
 	cmd->bufflen = se_cmd->data_length;
-	cmd->dma_data_direction = tcm_qla2xxx_mapping_dir(se_cmd);
+	cmd->dma_data_direction = target_reverse_dma_direction(se_cmd);
 	cmd->aborted = (se_cmd->transport_state & CMD_T_ABORTED);
 
 	cmd->sg_cnt = se_cmd->t_data_nents;
@@ -694,7 +660,7 @@ static int tcm_qla2xxx_queue_status(struct se_cmd *se_cmd)
 	cmd->sg = NULL;
 	cmd->sg_cnt = 0;
 	cmd->offset = 0;
-	cmd->dma_data_direction = tcm_qla2xxx_mapping_dir(se_cmd);
+	cmd->dma_data_direction = target_reverse_dma_direction(se_cmd);
 	cmd->aborted = (se_cmd->transport_state & CMD_T_ABORTED);
 
 	if (se_cmd->data_direction == DMA_FROM_DEVICE) {
@@ -702,8 +668,12 @@ static int tcm_qla2xxx_queue_status(struct se_cmd *se_cmd)
 		 * For FCP_READ with CHECK_CONDITION status, clear cmd->bufflen
 		 * for qla_tgt_xmit_response LLD code
 		 */
+		if (se_cmd->se_cmd_flags & SCF_OVERFLOW_BIT) {
+			se_cmd->se_cmd_flags &= ~SCF_OVERFLOW_BIT;
+			se_cmd->residual_count = 0;
+		}
 		se_cmd->se_cmd_flags |= SCF_UNDERFLOW_BIT;
-		se_cmd->residual_count = se_cmd->data_length;
+		se_cmd->residual_count += se_cmd->data_length;
 
 		cmd->bufflen = 0;
 	}
@@ -713,7 +683,7 @@ static int tcm_qla2xxx_queue_status(struct se_cmd *se_cmd)
 	return qlt_xmit_response(cmd, xmit_type, se_cmd->scsi_status);
 }
 
-static int tcm_qla2xxx_queue_tm_rsp(struct se_cmd *se_cmd)
+static void tcm_qla2xxx_queue_tm_rsp(struct se_cmd *se_cmd)
 {
 	struct se_tmr_req *se_tmr = se_cmd->se_tmr_req;
 	struct qla_tgt_mgmt_cmd *mcmd = container_of(se_cmd,
@@ -745,19 +715,6 @@ static int tcm_qla2xxx_queue_tm_rsp(struct se_cmd *se_cmd)
 	 * CTIO response packet.
 	 */
 	qlt_xmit_tm_rsp(mcmd);
-
-	return 0;
-}
-
-static u16 tcm_qla2xxx_get_fabric_sense_len(void)
-{
-	return 0;
-}
-
-static u16 tcm_qla2xxx_set_fabric_sense_len(struct se_cmd *se_cmd,
-					u32 sense_length)
-{
-	return 0;
 }
 
 /* Local pointer to allocated TCM configfs fabric module */
@@ -820,12 +777,14 @@ static void tcm_qla2xxx_put_session(struct se_session *se_sess)
 
 static void tcm_qla2xxx_put_sess(struct qla_tgt_sess *sess)
 {
-	tcm_qla2xxx_put_session(sess->se_sess);
+	assert_spin_locked(&sess->vha->hw->hardware_lock);
+	kref_put(&sess->se_sess->sess_kref, tcm_qla2xxx_release_session);
 }
 
 static void tcm_qla2xxx_shutdown_sess(struct qla_tgt_sess *sess)
 {
-	tcm_qla2xxx_shutdown_session(sess->se_sess);
+	assert_spin_locked(&sess->vha->hw->hardware_lock);
+	target_sess_cmd_list_set_waiting(sess->se_sess);
 }
 
 static struct se_node_acl *tcm_qla2xxx_make_nodeacl(
@@ -888,7 +847,7 @@ static ssize_t tcm_qla2xxx_tpg_attrib_show_##name(			\
 	struct tcm_qla2xxx_tpg *tpg = container_of(se_tpg,		\
 			struct tcm_qla2xxx_tpg, se_tpg);		\
 									\
-	return sprintf(page, "%u\n", QLA_TPG_ATTRIB(tpg)->name);	\
+	return sprintf(page, "%u\n", tpg->tpg_attrib.name);	\
 }									\
 									\
 static ssize_t tcm_qla2xxx_tpg_attrib_store_##name(			\
@@ -960,11 +919,19 @@ DEF_QLA_TPG_ATTR_BOOL(prod_mode_write_protect);
 DEF_QLA_TPG_ATTRIB(prod_mode_write_protect);
 QLA_TPG_ATTR(prod_mode_write_protect, S_IRUGO | S_IWUSR);
 
+/*
+ * Define tcm_qla2xxx_tpg_attrib_s_demo_mode_login_only
+ */
+DEF_QLA_TPG_ATTR_BOOL(demo_mode_login_only);
+DEF_QLA_TPG_ATTRIB(demo_mode_login_only);
+QLA_TPG_ATTR(demo_mode_login_only, S_IRUGO | S_IWUSR);
+
 static struct configfs_attribute *tcm_qla2xxx_tpg_attrib_attrs[] = {
 	&tcm_qla2xxx_tpg_attrib_generate_node_acls.attr,
 	&tcm_qla2xxx_tpg_attrib_cache_dynamic_acls.attr,
 	&tcm_qla2xxx_tpg_attrib_demo_mode_write_protect.attr,
 	&tcm_qla2xxx_tpg_attrib_prod_mode_write_protect.attr,
+	&tcm_qla2xxx_tpg_attrib_demo_mode_login_only.attr,
 	NULL,
 };
 
@@ -1060,9 +1027,10 @@ static struct se_portal_group *tcm_qla2xxx_make_tpg(
 	 * By default allow READ-ONLY TPG demo-mode access w/ cached dynamic
 	 * NodeACLs
 	 */
-	QLA_TPG_ATTRIB(tpg)->generate_node_acls = 1;
-	QLA_TPG_ATTRIB(tpg)->demo_mode_write_protect = 1;
-	QLA_TPG_ATTRIB(tpg)->cache_dynamic_acls = 1;
+	tpg->tpg_attrib.generate_node_acls = 1;
+	tpg->tpg_attrib.demo_mode_write_protect = 1;
+	tpg->tpg_attrib.cache_dynamic_acls = 1;
+	tpg->tpg_attrib.demo_mode_login_only = 1;
 
 	ret = core_tpg_register(&tcm_qla2xxx_fabric_configfs->tf_ops, wwn,
 				&tpg->se_tpg, tpg, TRANSPORT_TPG_TYPE_NORMAL);
@@ -1395,7 +1363,7 @@ static void tcm_qla2xxx_free_session(struct qla_tgt_sess *sess)
 		dump_stack();
 		return;
 	}
-	target_wait_for_sess_cmds(se_sess, 0);
+	target_wait_for_sess_cmds(se_sess);
 
 	transport_deregister_session_configfs(sess->se_sess);
 	transport_deregister_session(sess->se_sess);
@@ -1482,6 +1450,74 @@ static int tcm_qla2xxx_check_initiator_node_acl(
 	return 0;
 }
 
+static void tcm_qla2xxx_update_sess(struct qla_tgt_sess *sess, port_id_t s_id,
+				    uint16_t loop_id, bool conf_compl_supported)
+{
+	struct qla_tgt *tgt = sess->tgt;
+	struct qla_hw_data *ha = tgt->ha;
+	struct tcm_qla2xxx_lport *lport = ha->tgt.target_lport_ptr;
+	struct se_node_acl *se_nacl = sess->se_sess->se_node_acl;
+	struct tcm_qla2xxx_nacl *nacl = container_of(se_nacl,
+			struct tcm_qla2xxx_nacl, se_node_acl);
+	u32 key;
+
+
+	if (sess->loop_id != loop_id || sess->s_id.b24 != s_id.b24)
+		pr_info("Updating session %p from port %8phC loop_id %d -> %d s_id %x:%x:%x -> %x:%x:%x\n",
+		    sess, sess->port_name,
+		    sess->loop_id, loop_id, sess->s_id.b.domain,
+		    sess->s_id.b.area, sess->s_id.b.al_pa, s_id.b.domain,
+		    s_id.b.area, s_id.b.al_pa);
+
+	if (sess->loop_id != loop_id) {
+		/*
+		 * Because we can shuffle loop IDs around and we
+		 * update different sessions non-atomically, we might
+		 * have overwritten this session's old loop ID
+		 * already, and we might end up overwriting some other
+		 * session that will be updated later.  So we have to
+		 * be extra careful and we can't warn about those things...
+		 */
+		if (lport->lport_loopid_map[sess->loop_id].se_nacl == se_nacl)
+			lport->lport_loopid_map[sess->loop_id].se_nacl = NULL;
+
+		lport->lport_loopid_map[loop_id].se_nacl = se_nacl;
+
+		sess->loop_id = loop_id;
+	}
+
+	if (sess->s_id.b24 != s_id.b24) {
+		key = (((u32) sess->s_id.b.domain << 16) |
+		       ((u32) sess->s_id.b.area   <<  8) |
+		       ((u32) sess->s_id.b.al_pa));
+
+		if (btree_lookup32(&lport->lport_fcport_map, key))
+			WARN(btree_remove32(&lport->lport_fcport_map, key) != se_nacl,
+			     "Found wrong se_nacl when updating s_id %x:%x:%x\n",
+			     sess->s_id.b.domain, sess->s_id.b.area, sess->s_id.b.al_pa);
+		else
+			WARN(1, "No lport_fcport_map entry for s_id %x:%x:%x\n",
+			     sess->s_id.b.domain, sess->s_id.b.area, sess->s_id.b.al_pa);
+
+		key = (((u32) s_id.b.domain << 16) |
+		       ((u32) s_id.b.area   <<  8) |
+		       ((u32) s_id.b.al_pa));
+
+		if (btree_lookup32(&lport->lport_fcport_map, key)) {
+			WARN(1, "Already have lport_fcport_map entry for s_id %x:%x:%x\n",
+			     s_id.b.domain, s_id.b.area, s_id.b.al_pa);
+			btree_update32(&lport->lport_fcport_map, key, se_nacl);
+		} else {
+			btree_insert32(&lport->lport_fcport_map, key, se_nacl, GFP_ATOMIC);
+		}
+
+		sess->s_id = s_id;
+		nacl->nport_id = key;
+	}
+
+	sess->conf_compl_supported = conf_compl_supported;
+}
+
 /*
  * Calls into tcm_qla2xxx used by qla2xxx LLD I/O path.
  */
@@ -1492,6 +1528,7 @@ static struct qla_tgt_func_tmpl tcm_qla2xxx_template = {
 	.free_cmd		= tcm_qla2xxx_free_cmd,
 	.free_mcmd		= tcm_qla2xxx_free_mcmd,
 	.free_session		= tcm_qla2xxx_free_session,
+	.update_sess		= tcm_qla2xxx_update_sess,
 	.check_initiator_node_acl = tcm_qla2xxx_check_initiator_node_acl,
 	.find_sess_by_s_id	= tcm_qla2xxx_find_sess_by_s_id,
 	.find_sess_by_loop_id	= tcm_qla2xxx_find_sess_by_loop_id,
@@ -1559,6 +1596,7 @@ static struct se_wwn *tcm_qla2xxx_make_lport(
 	lport->lport_wwpn = wwpn;
 	tcm_qla2xxx_format_wwn(&lport->lport_name[0], TCM_QLA2XXX_NAMELEN,
 				wwpn);
+	sprintf(lport->lport_naa_name, "naa.%016llx", (unsigned long long) wwpn);
 
 	ret = tcm_qla2xxx_init_lport(lport);
 	if (ret != 0)
@@ -1626,6 +1664,7 @@ static struct se_wwn *tcm_qla2xxx_npiv_make_lport(
 	lport->lport_npiv_wwnn = npiv_wwnn;
 	tcm_qla2xxx_npiv_format_wwn(&lport->lport_npiv_name[0],
 			TCM_QLA2XXX_NAMELEN, npiv_wwpn, npiv_wwnn);
+	sprintf(lport->lport_naa_name, "naa.%016llx", (unsigned long long) npiv_wwpn);
 
 /* FIXME: tcm_qla2xxx_npiv_make_lport */
 	ret = -ENOSYS;
@@ -1686,11 +1725,10 @@ static struct target_core_fabric_ops tcm_qla2xxx_ops = {
 					tcm_qla2xxx_check_demo_write_protect,
 	.tpg_check_prod_mode_write_protect =
 					tcm_qla2xxx_check_prod_write_protect,
-	.tpg_check_demo_mode_login_only = tcm_qla2xxx_check_true,
+	.tpg_check_demo_mode_login_only = tcm_qla2xxx_check_demo_mode_login_only,
 	.tpg_alloc_fabric_acl		= tcm_qla2xxx_alloc_fabric_acl,
 	.tpg_release_fabric_acl		= tcm_qla2xxx_release_fabric_acl,
 	.tpg_get_inst_index		= tcm_qla2xxx_tpg_get_inst_index,
-	.new_cmd_map			= NULL,
 	.check_stop_free		= tcm_qla2xxx_check_stop_free,
 	.release_cmd			= tcm_qla2xxx_release_cmd,
 	.put_session			= tcm_qla2xxx_put_session,
@@ -1706,8 +1744,6 @@ static struct target_core_fabric_ops tcm_qla2xxx_ops = {
 	.queue_data_in			= tcm_qla2xxx_queue_data_in,
 	.queue_status			= tcm_qla2xxx_queue_status,
 	.queue_tm_rsp			= tcm_qla2xxx_queue_tm_rsp,
-	.get_fabric_sense_len		= tcm_qla2xxx_get_fabric_sense_len,
-	.set_fabric_sense_len		= tcm_qla2xxx_set_fabric_sense_len,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c
@@ -1737,7 +1773,7 @@ static struct target_core_fabric_ops tcm_qla2xxx_npiv_ops = {
 	.tpg_check_demo_mode_cache	= tcm_qla2xxx_check_true,
 	.tpg_check_demo_mode_write_protect = tcm_qla2xxx_check_true,
 	.tpg_check_prod_mode_write_protect = tcm_qla2xxx_check_false,
-	.tpg_check_demo_mode_login_only	= tcm_qla2xxx_check_true,
+	.tpg_check_demo_mode_login_only	= tcm_qla2xxx_check_demo_mode_login_only,
 	.tpg_alloc_fabric_acl		= tcm_qla2xxx_alloc_fabric_acl,
 	.tpg_release_fabric_acl		= tcm_qla2xxx_release_fabric_acl,
 	.tpg_get_inst_index		= tcm_qla2xxx_tpg_get_inst_index,
@@ -1755,8 +1791,6 @@ static struct target_core_fabric_ops tcm_qla2xxx_npiv_ops = {
 	.queue_data_in			= tcm_qla2xxx_queue_data_in,
 	.queue_status			= tcm_qla2xxx_queue_status,
 	.queue_tm_rsp			= tcm_qla2xxx_queue_tm_rsp,
-	.get_fabric_sense_len		= tcm_qla2xxx_get_fabric_sense_len,
-	.set_fabric_sense_len		= tcm_qla2xxx_set_fabric_sense_len,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c
@@ -1796,16 +1830,16 @@ static int tcm_qla2xxx_register_configfs(void)
 	/*
 	 * Setup default attribute lists for various fabric->tf_cit_tmpl
 	 */
-	TF_CIT_TMPL(fabric)->tfc_wwn_cit.ct_attrs = tcm_qla2xxx_wwn_attrs;
-	TF_CIT_TMPL(fabric)->tfc_tpg_base_cit.ct_attrs = tcm_qla2xxx_tpg_attrs;
-	TF_CIT_TMPL(fabric)->tfc_tpg_attrib_cit.ct_attrs =
+	fabric->tf_cit_tmpl.tfc_wwn_cit.ct_attrs = tcm_qla2xxx_wwn_attrs;
+	fabric->tf_cit_tmpl.tfc_tpg_base_cit.ct_attrs = tcm_qla2xxx_tpg_attrs;
+	fabric->tf_cit_tmpl.tfc_tpg_attrib_cit.ct_attrs =
 						tcm_qla2xxx_tpg_attrib_attrs;
-	TF_CIT_TMPL(fabric)->tfc_tpg_param_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_np_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_param_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_param_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_np_base_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_base_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
+	fabric->tf_cit_tmpl.tfc_tpg_nacl_param_cit.ct_attrs = NULL;
 	/*
 	 * Register the fabric for use within TCM
 	 */
@@ -1836,15 +1870,15 @@ static int tcm_qla2xxx_register_configfs(void)
 	/*
 	 * Setup default attribute lists for various npiv_fabric->tf_cit_tmpl
 	 */
-	TF_CIT_TMPL(npiv_fabric)->tfc_wwn_cit.ct_attrs = tcm_qla2xxx_wwn_attrs;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_attrib_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_param_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_np_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_nacl_base_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
-	TF_CIT_TMPL(npiv_fabric)->tfc_tpg_nacl_param_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_wwn_cit.ct_attrs = tcm_qla2xxx_wwn_attrs;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_base_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_attrib_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_param_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_np_base_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_nacl_base_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
+	npiv_fabric->tf_cit_tmpl.tfc_tpg_nacl_param_cit.ct_attrs = NULL;
 	/*
 	 * Register the npiv_fabric for use within TCM
 	 */

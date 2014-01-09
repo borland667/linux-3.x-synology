@@ -27,6 +27,9 @@
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/init.h>
+#include <linux/module.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <asm/dcr.h>
@@ -1226,6 +1229,7 @@ static int __init crypto4xx_probe(struct platform_device *ofdev)
 	core_dev->dev->ce_base = of_iomap(ofdev->dev.of_node, 0);
 	if (!core_dev->dev->ce_base) {
 		dev_err(dev, "failed to of_iomap\n");
+		rc = -ENOMEM;
 		goto err_iomap;
 	}
 

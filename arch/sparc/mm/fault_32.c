@@ -32,24 +32,6 @@
 
 int show_unhandled_signals = 1;
 
-/* At boot time we determine these two values necessary for setting
- * up the segment maps and page table entries (pte's).
- */
-
-int num_contexts;
-
-/* Return how much physical memory we have.  */
-unsigned long probe_memory(void)
-{
-	unsigned long total = 0;
-	int i;
-
-	for (i = 0; sp_banks[i].num_bytes; i++)
-		total += sp_banks[i].num_bytes;
-
-	return total;
-}
-
 static void unhandled_fault(unsigned long, struct task_struct *,
 		struct pt_regs *) __attribute__ ((noreturn));
 
@@ -195,8 +177,7 @@ asmlinkage void do_sparc_fault(struct pt_regs *regs, int text_fault, int write,
 	unsigned long g2;
 	int from_user = !(regs->psr & PSR_PS);
 	int fault, code;
-	unsigned int flags = (FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE |
-			      (write ? FAULT_FLAG_WRITE : 0));
+	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	if (text_fault)
 		address = regs->pc;
@@ -253,6 +234,11 @@ good_area:
 			goto bad_area;
 	}
 
+	if (from_user)
+		flags |= FAULT_FLAG_USER;
+	if (write)
+		flags |= FAULT_FLAG_WRITE;
+
 	/*
 	 * If for any reason at all we couldn't handle the fault,
 	 * make sure we exit gracefully rather than endlessly redo
@@ -283,6 +269,7 @@ good_area:
 		}
 		if (fault & VM_FAULT_RETRY) {
 			flags &= ~FAULT_FLAG_ALLOW_RETRY;
+			flags |= FAULT_FLAG_TRIED;
 
 			/* No need to up_read(&mm->mmap_sem) as we would
 			 * have already released it in __lock_page_or_retry
@@ -400,6 +387,7 @@ static void force_user_fault(unsigned long address, int write)
 	struct vm_area_struct *vma;
 	struct task_struct *tsk = current;
 	struct mm_struct *mm = tsk->mm;
+	unsigned int flags = FAULT_FLAG_USER;
 	int code;
 
 	code = SEGV_MAPERR;
@@ -419,11 +407,12 @@ good_area:
 	if (write) {
 		if (!(vma->vm_flags & VM_WRITE))
 			goto bad_area;
+		flags |= FAULT_FLAG_WRITE;
 	} else {
 		if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
 			goto bad_area;
 	}
-	switch (handle_mm_fault(mm, vma, address, write ? FAULT_FLAG_WRITE : 0)) {
+	switch (handle_mm_fault(mm, vma, address, flags)) {
 	case VM_FAULT_SIGBUS:
 	case VM_FAULT_OOM:
 		goto do_sigbus;

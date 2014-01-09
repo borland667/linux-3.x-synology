@@ -105,8 +105,6 @@ register struct thread_info *current_thread_info_reg asm("g6");
 #define TI_W_SAVED	0x250
 /* #define TI_RESTART_BLOCK 0x25n */ /* Nobody cares */
 
-#define PREEMPT_ACTIVE		0x4000000
-
 /*
  * thread information flag bit numbers
  */
@@ -126,7 +124,6 @@ register struct thread_info *current_thread_info_reg asm("g6");
 #define _TIF_NOTIFY_RESUME	(1<<TIF_NOTIFY_RESUME)
 #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1<<TIF_NEED_RESCHED)
-#define _TIF_RESTORE_SIGMASK	(1<<TIF_RESTORE_SIGMASK)
 #define _TIF_USEDFPU		(1<<TIF_USEDFPU)
 #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
 

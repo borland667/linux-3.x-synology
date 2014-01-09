@@ -74,8 +74,16 @@ kallsyms()
 	info KSYM ${2}
 	local kallsymopt;
 
+	if [ -n "${CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX}" ]; then
+		kallsymopt="${kallsymopt} --symbol-prefix=_"
+	fi
+
 	if [ -n "${CONFIG_KALLSYMS_ALL}" ]; then
-		kallsymopt=--all-symbols
+		kallsymopt="${kallsymopt} --all-symbols"
+	fi
+
+	if [ -n "${CONFIG_ARM}" ] && [ -n "${CONFIG_PAGE_OFFSET}" ]; then
+		kallsymopt="${kallsymopt} --page-offset=$CONFIG_PAGE_OFFSET"
 	fi
 
 	local aflags="${KBUILD_AFLAGS} ${KBUILD_AFLAGS_KERNEL}               \
@@ -127,7 +135,14 @@ if [ "$1" = "clean" ]; then
 fi
 
 # We need access to CONFIG_ symbols
-. ./.config
+case "${KCONFIG_CONFIG}" in
+*/*)
+	. "${KCONFIG_CONFIG}"
+	;;
+*)
+	# Force using a file from the current directory
+	. "./${KCONFIG_CONFIG}"
+esac
 
 #link vmlinux.o
 info LD vmlinux.o
@@ -210,8 +225,8 @@ if [ -n "${CONFIG_KALLSYMS}" ]; then
 	mksysmap ${kallsyms_vmlinux} .tmp_System.map
 
 	if ! cmp -s System.map .tmp_System.map; then
-		echo Inconsistent kallsyms data
-		echo echo Try "make KALLSYMS_EXTRA_PASS=1" as a workaround
+		echo >&2 Inconsistent kallsyms data
+		echo >&2 Try "make KALLSYMS_EXTRA_PASS=1" as a workaround
 		cleanup
 		exit 1
 	fi

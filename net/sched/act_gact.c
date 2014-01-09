@@ -58,8 +58,9 @@ static const struct nla_policy gact_policy[TCA_GACT_MAX + 1] = {
 	[TCA_GACT_PROB]		= { .len = sizeof(struct tc_gact_p) },
 };
 
-static int tcf_gact_init(struct nlattr *nla, struct nlattr *est,
-			 struct tc_action *a, int ovr, int bind)
+static int tcf_gact_init(struct net *net, struct nlattr *nla,
+			 struct nlattr *est, struct tc_action *a,
+			 int ovr, int bind)
 {
 	struct nlattr *tb[TCA_GACT_MAX + 1];
 	struct tc_gact *parm;
@@ -67,6 +68,9 @@ static int tcf_gact_init(struct nlattr *nla, struct nlattr *est,
 	struct tcf_common *pc;
 	int ret = 0;
 	int err;
+#ifdef CONFIG_GACT_PROB
+	struct tc_gact_p *p_parm = NULL;
+#endif
 
 	if (nla == NULL)
 		return -EINVAL;
@@ -82,6 +86,12 @@ static int tcf_gact_init(struct nlattr *nla, struct nlattr *est,
 #ifndef CONFIG_GACT_PROB
 	if (tb[TCA_GACT_PROB] != NULL)
 		return -EOPNOTSUPP;
+#else
+	if (tb[TCA_GACT_PROB]) {
+		p_parm = nla_data(tb[TCA_GACT_PROB]);
+		if (p_parm->ptype >= MAX_RAND)
+			return -EINVAL;
+	}
 #endif
 
 	pc = tcf_hash_check(parm->index, a, bind, &gact_hash_info);
@@ -92,10 +102,11 @@ static int tcf_gact_init(struct nlattr *nla, struct nlattr *est,
 			return PTR_ERR(pc);
 		ret = ACT_P_CREATED;
 	} else {
-		if (!ovr) {
-			tcf_hash_release(pc, bind, &gact_hash_info);
+		if (bind)/* dont override defaults */
+			return 0;
+		tcf_hash_release(pc, bind, &gact_hash_info);
+		if (!ovr)
 			return -EEXIST;
-		}
 	}
 
 	gact = to_gact(pc);
@@ -103,8 +114,7 @@ static int tcf_gact_init(struct nlattr *nla, struct nlattr *est,
 	spin_lock_bh(&gact->tcf_lock);
 	gact->tcf_action = parm->action;
 #ifdef CONFIG_GACT_PROB
-	if (tb[TCA_GACT_PROB] != NULL) {
-		struct tc_gact_p *p_parm = nla_data(tb[TCA_GACT_PROB]);
+	if (p_parm) {
 		gact->tcfg_paction = p_parm->paction;
 		gact->tcfg_pval    = p_parm->pval;
 		gact->tcfg_ptype   = p_parm->ptype;
@@ -133,7 +143,7 @@ static int tcf_gact(struct sk_buff *skb, const struct tc_action *a,
 
 	spin_lock(&gact->tcf_lock);
 #ifdef CONFIG_GACT_PROB
-	if (gact->tcfg_ptype && gact_rand[gact->tcfg_ptype] != NULL)
+	if (gact->tcfg_ptype)
 		action = gact_rand[gact->tcfg_ptype](gact);
 	else
 		action = gact->tcf_action;
@@ -197,9 +207,7 @@ static struct tc_action_ops act_gact_ops = {
 	.act		=	tcf_gact,
 	.dump		=	tcf_gact_dump,
 	.cleanup	=	tcf_gact_cleanup,
-	.lookup		=	tcf_hash_search,
 	.init		=	tcf_gact_init,
-	.walk		=	tcf_generic_walker
 };
 
 MODULE_AUTHOR("Jamal Hadi Salim(2002-4)");

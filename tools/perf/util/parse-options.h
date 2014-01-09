@@ -140,6 +140,7 @@ extern NORETURN void usage_with_options(const char * const *usagestr,
 enum {
 	PARSE_OPT_HELP = -1,
 	PARSE_OPT_DONE,
+	PARSE_OPT_LIST,
 	PARSE_OPT_UNKNOWN,
 };
 
@@ -157,7 +158,9 @@ struct parse_opt_ctx_t {
 };
 
 extern int parse_options_usage(const char * const *usagestr,
-			       const struct option *opts);
+			       const struct option *opts,
+			       const char *optstr,
+			       bool short_opt);
 
 extern void parse_options_start(struct parse_opt_ctx_t *ctx,
 				int argc, const char **argv, int flags);
