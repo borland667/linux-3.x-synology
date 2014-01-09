@@ -16,7 +16,7 @@
 			};
 			pmx_fan_33: pmx-fan-33 {
 				marvell,pins = "mpp33";
-				marvell,function = "gpio";
+				marvell,function = "gpo";
 			};
 			pmx_fan_34: pmx-fan-34 {
 				marvell,pins = "mpp34";
