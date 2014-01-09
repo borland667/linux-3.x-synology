@@ -42,10 +42,13 @@
 #include <linux/moduleparam.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/gpio-regulator.h>
+#include <linux/regulator/machine.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <mach/kirkwood.h>
-#include <mach/synology.h>
+#include <plat/pcie.h>
 #include "common.h"
 #include "mpp.h"
 
@@ -141,16 +144,14 @@ static struct gpio_led synology_hdd_led_20[] = {
 
 #define HDD_LED_20_COUNT(x) ((x) * 2)
 
-/*
 static struct gpio_led synology_hdd_led_21[] = {
-	{ .name = "hdd1:green", .gpio = 21, .active_low = 1 },
+	/* { .name = "hdd1:green", .gpio = 21, .active_low = 1 }, */
 	{ .name = "hdd1:amber", .gpio = 23, .active_low = 1 },
-	{ .name = "hdd2:green", .gpio = 20, .active_low = 1 },
+	/* { .name = "hdd2:green", .gpio = 20, .active_low = 1 }, */
 	{ .name = "hdd2:amber", .gpio = 22, .active_low = 1 },
 };
 
 #define HDD_LED_21_COUNT(x) (x)
-*/
 
 static struct gpio_led synology_hdd_led_36[] = {
 	{ .name = "hdd1:green",	.gpio = 36, .active_low = 1 },
@@ -327,7 +328,7 @@ static void synology_power_off(void){
 	while (1);
 }
 
-static void synology_restart(char mode, const char *cmd){
+static void synology_restart(enum reboot_mode mode, const char *cmd){
 	/* 9600 baud divisor */
 	const unsigned divisor = ((kirkwood_tclk + (8 * 9600)) / (16 * 9600));
 
@@ -373,40 +374,105 @@ static struct i2c_board_info __initdata synology_seiko_i2c_info[] = {
  * Hard Disk power-up
  ****************************************************************************/
 
-static unsigned synology_hdd_power_pin_29[] __initdata = { 29, 31 };
-static unsigned synology_hdd_power_pin_30[] __initdata = { 30, 34, 44, 45 };
+#define HDD_POWERUP_DELAY_US 5000000
 
-#define synology_hdd_power_pin_31 (synology_hdd_power_pin_29 + 1)
-#define synology_hdd_power_pin_34 (synology_hdd_power_pin_30 + 1)
+static struct regulator_init_data synology_hddpower_init_data[] = {
+	{
+		.constraints = {
+			.valid_ops_mask = REGULATOR_CHANGE_STATUS,
+		}
+	},
+	{
+		.constraints = {
+			.valid_ops_mask = REGULATOR_CHANGE_STATUS,
+		}
+	},
+	{
+		.constraints = {
+			.valid_ops_mask = REGULATOR_CHANGE_STATUS,
+		}
+	},
+	{
+		.constraints = {
+			.valid_ops_mask = REGULATOR_CHANGE_STATUS,
+		}
+	},
+};
+
+static struct gpio_regulator_config synology_hddpower_config[] = {
+	{
+		.supply_name = "hdd1power",
+		.enable_high = 1,
+		.enabled_at_boot = 1,
+		.type = REGULATOR_VOLTAGE,
+		.init_data = &synology_hddpower_init_data[0],
+		.startup_delay = HDD_POWERUP_DELAY_US,
+	},
+	{
+		.supply_name = "hdd2power",
+		.enable_high = 1,
+		.enabled_at_boot = 1,
+		.type = REGULATOR_VOLTAGE,
+		.init_data = &synology_hddpower_init_data[1],
+		.startup_delay = HDD_POWERUP_DELAY_US,
+	},
+	{
+		.supply_name = "hdd3power",
+		.enable_high = 1,
+		.enabled_at_boot = 1,
+		.type = REGULATOR_VOLTAGE,
+		.init_data = &synology_hddpower_init_data[2],
+		.startup_delay = HDD_POWERUP_DELAY_US,
+	},
+	{
+		.supply_name = "hdd4power",
+		.enable_high = 1,
+		.enabled_at_boot = 1,
+		.type = REGULATOR_VOLTAGE,
+		.init_data = &synology_hddpower_init_data[3],
+		.startup_delay = HDD_POWERUP_DELAY_US,
+	},
+};
+
+static struct platform_device synology_hddpower[] = {
+	{
+		.name = "gpio-regulator",
+		.id   = 0,
+		.dev  = {
+			.platform_data = &synology_hddpower_config[0],
+		},
+	},
+	{
+		.name = "gpio-regulator",
+		.id   = 1,
+		.dev  = {
+			.platform_data = &synology_hddpower_config[1],
+		},
+	},
+	{
+		.name = "gpio-regulator",
+		.id   = 2,
+		.dev  = {
+			.platform_data = &synology_hddpower_config[2],
+		},
+	},
+	{
+		.name = "gpio-regulator",
+		.id   = 3,
+		.dev  = {
+			.platform_data = &synology_hddpower_config[3],
+		},
+	},
+};
+
+static unsigned synology_hdd_power_pin_29[] __initdata = { 29, 31 };
+static unsigned synology_hdd_power_pin_31[] __initdata = {  0, 31 };
+static unsigned synology_hdd_power_pin_30[] __initdata = { 30, 34, 44, 45 };
+static unsigned synology_hdd_power_pin_34[] __initdata = {  0, 34, 44, 45 };
+
 #define synology_hdd_power_pin_NO NULL
 
 #define HDD_POWER(x) synology_hdd_power_pin_ ## x
-
-static unsigned *synology_hdd_power_pin __initdata;
-static unsigned synology_hdd_power_pin_count __initdata;
-
-static void __init synology_hdd_powerup(void){
-	int err;
-	int i;
-	int first = 1;
-	for (i = 0; i < synology_hdd_power_pin_count; i++){
-		int pin = synology_hdd_power_pin[i];
-		if (!first && HDD_POWERUP_DELAY > 0){
-			mdelay(HDD_POWERUP_DELAY);
-		}
-		err = gpio_request(pin, NULL);
-		if (err == 0){
-			err = gpio_direction_output(pin, 1);
-			gpio_free(pin);
-		}
-		if (err){
-			pr_err("%s: Failed to power up HDD%d\n", __func__, i + 1);
-		} else {
-			pr_info("%s: HDD%d powering up\n", __func__, i + 1);
-			first = 0;
-		}
-	}
-}
 
 /*****************************************************************************
  * MPP Config
@@ -485,8 +551,8 @@ static struct synology_mpp_config_chain synology_628x_2bay_mpp_config __initdata
 		 */
 		MPP20_SATA1_ACTn,	/* HDD2 Green LED */
 		MPP21_SATA0_ACTn,	/* HDD1 Green LED */
-		MPP22_SATA1_PRESENTn,	/* HDD2 Amber LED */
-		MPP23_SATA0_PRESENTn,	/* HDD1 Amber LED */
+		MPP22_GPIO,		/* HDD2 Amber LED */
+		MPP23_GPIO,		/* HDD1 Amber LED */
 		MPP24_GPIO,		/* Unused */
 		MPP25_GPIO,		/* Unused */
 		MPP26_GPIO,		/* Unused */
@@ -569,7 +635,6 @@ static struct synology_mpp_config_chain synology_6282_4bay_mpp_config __initdata
  ****************************************************************************/
 
 struct syno_machine {
-	char *name;
 	struct synology_mpp_config_chain *mpp_config;
 	struct mv643xx_eth_platform_data *eth1_data;
 
@@ -595,9 +660,14 @@ struct syno_machine {
 	unsigned modelid_gpio_count;
 };
 
-#define SYNO_MACHINE(NAME,MPP,RTC,ETH1,MODEL,NRFAN,FANSPD,FANCTRL,FANSENSE,HDDLED,NRHDD,HDDPWR,NRHDDPWR,ALARMLED) \
+struct syno_machine_ref {
+	char *name;
+	struct syno_machine *machine;
+};
+
+#define DEFINE_SYNO_MACHINE(TYPE,MPP,RTC,ETH1,MODEL,NRFAN,FANSPD,FANCTRL,FANSENSE,HDDLED,NRHDD,HDDPWR,ALARMLED) \
+static struct syno_machine syno_machine_ ## TYPE = \
 	{ \
-		.name = NAME, \
 		.mpp_config = &MPP, \
 		.eth1_data = ETH1, \
 		.rtc_info = RTC, \
@@ -610,9 +680,15 @@ struct syno_machine {
 		.hdd_leds = HDD_LED(HDDLED), \
 		.hdd_leds_count = HDD_LED_COUNT(HDDLED,NRHDD), \
 		.hdd_power_gpio = HDD_POWER(HDDPWR), \
-		.hdd_power_gpio_count = NRHDDPWR, \
+		.hdd_power_gpio_count = NRHDD, \
 		.alarm_led = ALARM_LED(ALARMLED), \
 		.modelid_gpio_count = MODEL, \
+	}
+
+#define SYNO_MACHINE(NAME,MACHINE) \
+	{ \
+		.name = NAME, \
+		.machine = &syno_machine_ ## MACHINE \
 	}
 
 /* RTC Names */
@@ -621,50 +697,73 @@ struct syno_machine {
 /* ETH1 */
 #define GE01    &synology_ge01_data
 
-static struct syno_machine synology_machine_data[] __initdata = {
-	/*           name         mpp      rtc    eth1  mdl  nr  fan fan fan hdd nr  hdd nr  alm */
-	/*                        config                pin  fan spd ctl alm led hdd pwr pwr led */
+/*                  machine     mpp      rtc    eth1  mdl  nr  fan fan fan hdd nr  hdd alm */
+/*                  type        config                pin  fan spd ctl alm led hdd pwr led */
+DEFINE_SYNO_MACHINE(M6281_1_X,  M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, 21,  1, NO, NO);
+DEFINE_SYNO_MACHINE(M6281_2_X,  M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, 21,  2, 31, NO);
+DEFINE_SYNO_MACHINE(M6281_S_X,  M6281_S, RICOH, NULL, 0,   1,  120, 32, 35, 20,  4, NO, NO);
+DEFINE_SYNO_MACHINE(M6281_4_X,  M6281_4, RICOH, GE01, 2,   1,  120, 15, 18, 36,  5, NO, 12);
+DEFINE_SYNO_MACHINE(M6281_4_R,  M6281_4, RICOH, GE01, 2,   1,  120, 15, 18, 36,  5, NO, NO);
+DEFINE_SYNO_MACHINE(M6281_1,    M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, 21,  1, NO, NO);
+DEFINE_SYNO_MACHINE(M6281_2,    M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, 21,  2, 31, NO);
+DEFINE_SYNO_MACHINE(M6281_2_P,  M628x_2, SEIKO, NULL, 0,   1,  100, 32, 35, 21,  2, 29, NO);
+DEFINE_SYNO_MACHINE(M6281_4,    M6281_4, SEIKO, GE01, 2,   1,  120, 15, 18, 36,  5, NO, 12);
+DEFINE_SYNO_MACHINE(M6282_1,    M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, 21,  1, NO, NO);
+DEFINE_SYNO_MACHINE(M6282_1_P,  M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, 21,  1, 30, NO);
+DEFINE_SYNO_MACHINE(M6282_2,    M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, 21,  2, 34, NO);
+DEFINE_SYNO_MACHINE(M6282_2_P,  M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, 21,  2, 30, NO);
+DEFINE_SYNO_MACHINE(M6282_2_R,  M6282_4, SEIKO, NULL, 4,   3,  100, 15, 35, 38,  2, 30, NO);
+DEFINE_SYNO_MACHINE(M6282_4,    M6282_4, SEIKO, GE01, 4,   1,  100, 15, 35, 36,  4, 34, NO);
+DEFINE_SYNO_MACHINE(M6282_S,    M6282_4, SEIKO, GE01, 4,   1,  100, 15, 35, 36,  4, NO, NO);
+DEFINE_SYNO_MACHINE(M6282_4_R,  M6282_4, SEIKO, GE01, 4,   3,  100, 15, 35, 36,  4, NO, NO);
+
+static struct syno_machine_ref synology_machine_data[] __initdata = {
+	/*           name           machine */
+	/*                          type    */
 	/* 1-bay 6281 */
-	SYNO_MACHINE("DS109",     M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, NO,  1, NO,  0, NO),
-	SYNO_MACHINE("DS110jv10", M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, NO,  1, NO,  0, NO),
-	SYNO_MACHINE("DS110jv20", M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, NO,  1, NO,  0, NO),
-	SYNO_MACHINE("DS110jv30", M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, NO,  1, NO,  0, NO),
-	SYNO_MACHINE("DS110",     M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, NO,  1, NO,  0, NO),
+	SYNO_MACHINE("DS109",       M6281_1_X),
+	SYNO_MACHINE("DS110jv10",   M6281_1),
+	SYNO_MACHINE("DS110jv20",   M6281_1_X),
+	SYNO_MACHINE("DS110jv30",   M6281_1),
+	SYNO_MACHINE("DS110",       M6281_1_X),
 
 	/* 2-bay 6281 */
-	SYNO_MACHINE("DS209",     M628x_2, RICOH, NULL, 0,   1,  150, 32, 35, NO,  2, 31,  1, NO),
-	SYNO_MACHINE("DS210jv10", M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, NO,  2, 31,  1, NO),
-	SYNO_MACHINE("DS210jv20", M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, NO,  2, 31,  1, NO),
-	SYNO_MACHINE("DS210jv30", M628x_2, SEIKO, NULL, 0,   1,  150, 32, 35, NO,  2, 31,  1, NO),
-	SYNO_MACHINE("DS211j",    M628x_2, SEIKO, NULL, 0,   1,  100, 32, 35, NO,  2, 31,  1, NO),
-	SYNO_MACHINE("DS212jv10", M628x_2, SEIKO, NULL, 0,   1,  100, 32, 35, NO,  2, 29,  2, NO),
-	SYNO_MACHINE("DS212jv20", M628x_2, SEIKO, NULL, 0,   1,  100, 32, 35, NO,  2, 29,  2, NO),
+	SYNO_MACHINE("DS209",       M6281_2_X),
+	SYNO_MACHINE("DS210jv10",   M6281_2),
+	SYNO_MACHINE("DS210jv20",   M6281_2),
+	SYNO_MACHINE("DS210jv30",   M6281_2),
+	SYNO_MACHINE("DS211j",      M6281_2),
+	SYNO_MACHINE("DS212jv10",   M6281_2_P),
+	SYNO_MACHINE("DS212jv20",   M6281_2_P),
 
 	/* 4-bay 6281 */
-	SYNO_MACHINE("DS409slim", M6281_S, RICOH, NULL, 0,   1,  120, 32, 35, 20,  4, NO,  0, NO),
-	SYNO_MACHINE("DS409",     M6281_4, RICOH, GE01, 2,   1,  120, 15, 18, 36,  5, NO,  0, 12),
-	SYNO_MACHINE("RS409",     M6281_4, RICOH, GE01, 2,   1,  120, 15, 18, 36,  5, NO,  0, NO),
-	SYNO_MACHINE("DS410j",    M6281_4, RICOH, GE01, 2,   1,  120, 15, 18, 36,  5, NO,  0, 12),
-	SYNO_MACHINE("DS411j",    M6281_4, SEIKO, GE01, 2,   1,  100, 15, 35, 36,  5, NO,  0, 12),
+	SYNO_MACHINE("DS409slim",   M6281_S_X),
+	SYNO_MACHINE("DS409",       M6281_4_X),
+	SYNO_MACHINE("RS409",       M6281_4_R),
+	SYNO_MACHINE("DS410j",      M6281_4_X),
+	SYNO_MACHINE("DS411j",      M6281_4),
 
 	/* 1-bay 6282 */
-	SYNO_MACHINE("DS111",     M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  1, NO,  0, NO),
-	SYNO_MACHINE("DS112v10",  M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  1, 30,  1, NO),
+	SYNO_MACHINE("DS111",       M6282_1),
+	SYNO_MACHINE("DS112v10",    M6282_1_P),
 
 	/* 2-bay 6282 */
-	SYNO_MACHINE("DS211",     M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 34,  1, NO),
-	SYNO_MACHINE("DS211pv10", M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 34,  1, NO),
-	SYNO_MACHINE("DS211pv20", M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 34,  1, NO),
-	SYNO_MACHINE("DS212",     M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 30,  2, NO),
-	SYNO_MACHINE("DS212pv10", M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 30,  2, NO),
-	SYNO_MACHINE("DS212pv20", M628x_2, SEIKO, NULL, 4,   1,  100, 15, 35, NO,  2, 30,  2, NO),
-	SYNO_MACHINE("RS212",     M6282_4, SEIKO, NULL, 4,   3,  100, 15, 35, 38,  2, 30,  2, NO),
+	SYNO_MACHINE("DS211",       M6282_2),
+	SYNO_MACHINE("DS211pv10",   M6282_2),
+	SYNO_MACHINE("DS211pv20",   M6282_2),
+	SYNO_MACHINE("DS212",       M6282_2_P),
+	SYNO_MACHINE("DS212pv10",   M6282_2_P),
+	SYNO_MACHINE("DS212pv20",   M6282_2_P),
+	SYNO_MACHINE("DS213airv10", M6282_2_P),
+	SYNO_MACHINE("DS213v10",    M6282_2_P),
+	SYNO_MACHINE("RS212",       M6282_2_R),
 
 	/* 4-bay 6282 */
-	SYNO_MACHINE("DS411",     M6282_4, SEIKO, GE01, 4,   1,  100, 15, 35, 36,  4, 34,  3, NO),
-	SYNO_MACHINE("DS411slim", M6282_4, SEIKO, GE01, 4,   1,  100, 15, 35, 36,  4, NO,  0, NO),
-	SYNO_MACHINE("RS411",     M6282_4, SEIKO, GE01, 4,   3,  100, 15, 35, 36,  4, NO,  0, NO),
-	SYNO_MACHINE("RS812",     M6282_4, SEIKO, GE01, 4,   3,  100, 15, 35, 36,  4, NO,  0, NO),
+	SYNO_MACHINE("DS411",       M6282_4),
+	SYNO_MACHINE("DS413jv10",   M6282_4),
+	SYNO_MACHINE("DS411slim",   M6282_S),
+	SYNO_MACHINE("RS411",       M6282_4_R),
+	SYNO_MACHINE("RS812",       M6282_4_R),
 };
 
 /*****************************************************************************
@@ -682,7 +781,7 @@ static int __init synology_parse_hw_version(char *p){
 
 	for (i = 0; i < ARRAY_SIZE(synology_machine_data); i++){
 		if (strnicmp(synology_machine_data[i].name, p, 16) == 0){
-			synology_machine = &synology_machine_data[i];
+			synology_machine = synology_machine_data[i].machine;
 			break;
 		}
 	}
@@ -748,10 +847,13 @@ static void __init synology_init(void){
 		}
 
 		if (synology_machine->hdd_power_gpio != NULL){
-			synology_hdd_power_pin       = synology_machine->hdd_power_gpio;
-			synology_hdd_power_pin_count = synology_machine->hdd_power_gpio_count;
-
-			synology_hdd_powerup();
+			for (i = 0; i < synology_machine->hdd_power_gpio_count; i++){
+				int pin = synology_machine->hdd_power_gpio[i];
+				if (pin != 0){
+					synology_hddpower_config[i].enable_gpio = pin;
+					platform_device_register(&synology_hddpower[i]);
+				}
+			}
 		}
 
 		pm_power_off = synology_power_off;
@@ -765,6 +867,29 @@ static void __init synology_init(void){
 
 	panic_timeout = 10;
 }
+
+static int __init synology_pci_init(void)
+{
+	if (machine_is_synology_6282()) {
+		u32 dev, rev;
+
+		/*
+		 * Without this explicit reset, the PCIe SATA controller
+		 * (Marvell 88sx7042/sata_mv) is known to stop working
+		 * after a few minutes.
+		 */
+		orion_pcie_reset((void __iomem *)PCIE_VIRT_BASE);
+
+		kirkwood_pcie_id(&dev, &rev);
+		if (dev == MV88F6282_DEV_ID)
+			kirkwood_pcie_init(KW_PCIE1 | KW_PCIE0);
+		else
+			kirkwood_pcie_init(KW_PCIE0);
+	}
+
+	return 0;
+}
+subsys_initcall(synology_pci_init);
 
 #ifdef CONFIG_MACH_SYNOLOGY
 MACHINE_START(SYNOLOGY, "Synology DiskStation / RackStation")
