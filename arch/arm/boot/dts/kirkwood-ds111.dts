@@ -28,8 +28,6 @@
 	};
 
 	chosen {
-		bootargs = "console=ttyS0,115200n8 earlyprintk panic=5";
-		linux,initrd-start = <0x800040>;
-		linux,initrd-end   = <0x940000>;
+		bootargs = "console=ttyS0,115200n8";
 	};
 };
